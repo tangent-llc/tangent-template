@@ -29,7 +29,7 @@
         "terminal.integrated.defaultProfile.linux": "fish",
         "terminal.integrated.profiles.linux": {
           "fish": {
-            "path": "/usr/local/bin/fish"
+            "path": "/usr/bin/fish"
           }
         },
         "python.defaultInterpreterPath": "/root/.local/share/uv/python",
