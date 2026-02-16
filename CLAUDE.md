@@ -142,7 +142,7 @@ tangent-template/
 
 ## Constraints
 
-- This is a work machine (Circle K Europe). Corporate proxy may block some URLs.
+- Corporate proxy may block some URLs.
 - Windows long paths not enabled (requires admin)
 - `ruff` not in Windows host PATH -- works via VSCode extension
 - `code` CLI is available
