@@ -1,8 +1,6 @@
-# DEVELOPMENT.md
+# Development
 
 ## Prerequisites
-
-Before you start development, make sure you have installed the following tools:
 
 - [Docker](https://www.docker.com/get-started)
 - [Visual Studio Code](https://code.visualstudio.com/)
@@ -10,108 +8,78 @@ Before you start development, make sure you have installed the following tools:
 
 ## Getting Started
 
-1. Clone the repository:  `git clone <https://github.com/><your-github-username>/tangent-template.git`
+1. Clone the repository:
+   `git clone https://github.com/tangent-llc/tangent-template.git`
 
 2. Open the cloned repository with Visual Studio Code.
 
-3. You'll see a pop-up at the bottom right of the screen asking to "Reopen in Container". Click on it. This will start building the Docker image according to the Dockerfile and settings provided in the `.devcontainer` directory.
-If you didn't see any pop-up, press `F1`, type `Remote-Containers: Reopen in Container`, and hit `Enter`.
+3. You'll see a pop-up asking to "Reopen in Container". Click on it. This builds
+   the Docker environment from `.devcontainer/`. If you don't see the pop-up,
+   press `F1`, type `Dev Containers: Reopen in Container`, and hit `Enter`.
 
-4. After the Docker container is built and running, you're ready to start development.
+4. After the container is built and running, you're ready to start development.
 
-## Working with Code
+### Local Development (without container)
 
-This template has been set up with GitHub CodeSpaces and VSCode to provide a feature-rich development environment. Here's how you can use these tools:
+```bash
+bun install
+bun run dev        # Next.js dev server with Turbopack
+bun run ci         # Check formatting + linting + types
+bun run fix        # Auto-fix formatting + linting
+```
 
-### VSCode
+## Formatter Stack
 
-The `.devcontainer` directory defines the settings for the VSCode workspace.
+| Files                          | Format           | Lint   |
+| ------------------------------ | ---------------- | ------ |
+| JS/TS/JSX/TSX/CSS/JSON/MD/YAML | Prettier         | ESLint |
+| TOML                           | Even Better TOML | --     |
+| Python/Coconut                 | Ruff             | Ruff   |
 
-- You can modify `devcontainer.json` to adjust the environment (e.g., the Docker image, VSCode settings, extensions, etc.) according to your needs.
-
-- You can find the list of installed extensions in the `extensions` section of `devcontainer.json`. If you want to add a new extension, simply append its ID to the list.
-
-### Bun
-
-Bun is a build tool used for managing TypeScript projects. Run the `bun build` command to build your project, or use the `bun dev` command for development.
-
-### Poetry
-
-Poetry is a tool for Python dependency management. You can install new dependencies by running `poetry add <package-name>`. To update an existing dependency, run `poetry update <package-name>`. To install all dependencies of the project, use `poetry install`.
+All formatter configs are in the repo root: `.prettierrc`, `eslint.config.mjs`,
+`.editorconfig`. VSCode settings auto-route files to the correct formatter on
+save.
 
 ## Running Tests
 
-You can run the tests using the following commands:
-
-- Python: `poetry run pytest`
-
-- Typescript:  `bun test`
-
-## Linting and Formatting
-
-This template has pre-configured settings for linting and formatting:
-
-- Python: Formatting is handled by Black, and linting is handled by Pylint.
-
-- TypeScript: We use ESLint for linting and Prettier for formatting.
-
-Before committing your changes, it's recommended to format your code and fix any linting issues.
+- TypeScript: `bun test`
+- Python: `uv run pytest` (when project has a pyproject.toml with test deps)
 
 ## Git Hooks
 
-There are pre-commit and pre-push hooks set up in the `.githooks` directory. To enable these hooks, move them to the `.git/hooks` directory: `cp .githooks/* .git/hooks/`
+The pre-commit hook is managed by `scripts/precommit.coco`. Install it with:
 
-The `pre-commit` hook runs the linter, and the `pre-push` hook runs the tests and pushes to dockerhub.
+```bash
+coconut-run scripts/precommit.coco --install
+```
+
+It runs Prettier, ESLint, Ruff, and Coconut syntax checks on staged files.
 
 ## Environment Variables
 
-If your project needs environment variables, you can add them to the `.env` file in your project's root directory. This file is ignored by Git, so it won't be committed to the repository.
+Add environment variables to `.env.local` (ignored by Git). See `.env.example`
+for the template.
 
 ## Debugging
 
-VSCode's built-in debugger is preconfigured for this project.
+VSCode launch configurations are in `.vscode/launch.json`:
 
-- For Python, use the "Python: Current File" configuration to debug the currently open Python file.
-
-- For TypeScript, use the "TypeScript: Current TS File" configuration to debug the currently open TypeScript file.
-
-## Troubleshooting
-
-If you're experiencing issues with the Docker container or VSCode, you can rebuild the container.
-
-1. Press `F1` to open the command palette.
-2. Type "Remote-Containers: Rebuild Container" and hit `Enter`.
+- **Bun dev**: Start the Next.js dev server
+- **Python: Current File**: Debug the currently open Python file
 
 ## Project Structure
 
-The project is structured as follows:
-
-- `src/`: This directory contains all your source code.
-- `.devcontainer/`: This directory contains the configuration files for the VSCode dev container.
-- `tests/`: This directory contains all your test files.
-
-## Building and Running the Application
-
-To build and run your application:
-
-1. Open a terminal in VSCode (`View` -> `Terminal`).
-2. Run `bun dev` to start the development server.
+```
+tangent-template/
+├── src/app/           # Next.js App Router
+├── scripts/           # Coconut automation
+├── .devcontainer/     # Docker + Fish + CLI tools
+├── .vscode/           # Editor settings + extensions
+└── CLAUDE.md          # Claude Code operating instructions
+```
 
 ## Making a Pull Request
 
-Before making a pull request, make sure your code passes all the tests and doesn't have any linting errors.
-
-1. Push your changes to your fork: `git push origin <your-branch-name>`.
-2. Navigate to the original repository you created your fork from.
-3. Click on the “Pull request” button.
-4. Write a description explaining your changes.
-5. Click on the “Create pull request” button.
-
-## Tips
-
-1. Use the built-in terminal in VSCode for running the commands. This terminal shares the same environment as your dev container.
-2. If you want to add new dependencies to your project, make sure to add them to the Dockerfile or to install them with a postCreateCommand in the `devcontainer.json` file.
-
-## Conclusion
-
-We've covered how to get started with development, run tests, work with code, and more. Don't hesitate to tweak the settings to make the environment fit your workflow better. Happy coding!
+1. Push your branch: `git push origin <your-branch-name>`
+2. Open a pull request on GitHub
+3. Ensure all CI checks pass (`bun run ci`)

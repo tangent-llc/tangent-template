@@ -1,0 +1,69 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+.githooks/
+
+# Documentation
+README.md
+CHANGELOG.md
+.github/
+
+# Dependencies (install inside container)
+node_modules/
+.pnpm-store/
+.bun/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+.venv/
+venv/
+
+# Build artifacts
+.next/
+.turbo/
+dist/
+build/
+.vercel/
+
+# Coconut cache
+__coconut_cache__/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files (use .env.example as template)
+.env
+.env.*
+!.env.example
+
+# Temporary files
+.cache/
+.tmp/
+tmp/
+temp/
+
+# Testing
+coverage/
+.nyc_output/
+.coverage
+htmlcov/
+
+# Misc
+.stage/

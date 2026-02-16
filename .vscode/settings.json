@@ -1,126 +1,64 @@
 {
   "editor.defaultFormatter": "esbenp.prettier-vscode",
-  "editor.formatOnPaste": true,
   "editor.formatOnSave": true,
-  "editor.formatOnType": false,
-  "editor.fontFamily": "MesloLGS NF",
-  "editor.tabSize": 2,
-  "editor.wordWrap": "on",
   "editor.codeActionsOnSave": {
-    "source.organizeImports": true,
-    "source.fixAll": true
-  },
-  "formattingToggle.affects": ["editor.formatOnSave"],
-  "files.trimTrailingWhitespace": true,
-  "files.insertFinalNewline": true,
-  "git.ignoreMissingGitWarning": true,
-  "workbench.colorTheme": "Monokai Pro (Filter Ristretto)",
-  "workbench.iconTheme": "material-icon-theme",
-  "gitlens.currentLine.dateFormat": "DD.MM.YY",
-  "[javascript]": {
-    "editor.defaultFormatter": "rome.rome"
+    "source.fixAll.eslint": "explicit",
+    "source.organizeImports": "never"
   },
   "[typescript]": {
-    "editor.defaultFormatter": "rome.rome"
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
-  "[python]": {
-    "editor.defaultFormatter": "ms-python.python"
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[css]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[html]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "[markdown]": {
-    "editor.defaultFormatter": "DavidAnson.vscode-markdownlint"
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "[yaml]": {
-    "editor.defaultFormatter": "redhat.vscode-yaml"
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "[toml]": {
     "editor.defaultFormatter": "tamasfe.even-better-toml"
   },
-  "python.formatting.provider": "black",
-  "python.linting.enabled": true,
-  "python.linting.pylintEnabled": false,
-  "python.linting.flake8Enabled": false,
-  "python.languageServer": "Pylance",
-  "tailwindCSS.includeLanguages": {
-    "plaintext": "html"
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
   },
-  "javascript.updateImportsOnFileMove.enabled": "always",
-  "typescript.updateImportsOnFileMove.enabled": "always",
-  "breadcrumbs.enabled": true,
-  "terminal.integrated.fontFamily": "MesloLGS NF",
-  "dev.containers.workspaceMountConsistency": "cached",
-  "dev.containers.defaultExtensions": [
-    "alefragnani.Bookmarks",
-    "amazonwebservices.aws-toolkit-vscode",
-    "skyapps.fish-vscode",
-    "bradlc.vscode-tailwindcss",
-    "christian-kohler.npm-intellisense",
-    "christian-kohler.path-intellisense",
-    "DavidAnson.vscode-markdownlint",
-    "davidlday.languagetool-linter",
-    "eamodio.gitlens",
-    "esbenp.prettier-vscode",
-    "formulahendry.auto-close-tag",
-    "formulahendry.auto-rename-tag",
-    "GitHub.codespaces",
-    "Gruntfuggly.todo-tree",
-    "mathe42.surreal-notebook",
-    "mathe42.surrealql",
-    "mechatroner.rainbow-csv",
-    "mikestead.dotenv",
-    "monokai.theme-monokai-pro-vscode",
-    "ms-azuretools.vscode-docker",
-    "ms-python.black-formatter",
-    "ms-python.python",
-    "ms-python.vscode-pylance",
-    "ms-toolsai.jupyter",
-    "ms-toolsai.jupyter-keymap",
-    "ms-toolsai.jupyter-renderers",
-    "ms-toolsai.vscode-jupyter-cell-tags",
-    "ms-toolsai.vscode-jupyter-slideshow",
-    "PKief.material-icon-theme",
-    "quicktype.quicktype",
-    "redhat.vscode-yaml",
-    "richie5um2.vscode-sort-json",
-    "rome.rome",
-    "steoates.autoimport",
-    "streetsidesoftware.code-spell-checker",
-    "streetsidesoftware.code-spell-checker-german",
-    "streetsidesoftware.code-spell-checker-scientific-terms",
-    "tamasfe.even-better-toml",
-    "TheNuProjectContributors.vscode-nushell-lang",
-    "tombonnike.vscode-status-bar-format-toggle",
-    "Tyriar.sort-lines",
-    "wix.vscode-import-cost",
-    "yzhang.markdown-all-in-one",
-    "Zignd.html-css-class-completion"
+  "[coconut]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  },
+  "css.validate": false,
+  "scss.validate": false,
+  "less.validate": false,
+  "files.eol": "\n",
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "eslint.useFlatConfig": true,
+  "tailwindCSS.experimental.classRegex": [
+    ["cva\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"],
+    ["cn\\(([^)]*)\\)", "(?:'|\"|`)([^']*)(?:'|\"|`)"]
   ],
-  "yaml.customTags": [
-    "!And",
-    "!And sequence",
-    "!If",
-    "!If sequence",
-    "!Not",
-    "!Not sequence",
-    "!Equals",
-    "!Equals sequence",
-    "!Or",
-    "!Or sequence",
-    "!FindInMap",
-    "!FindInMap sequence",
-    "!Base64",
-    "!Join",
-    "!Join sequence",
-    "!Cidr",
-    "!Ref",
-    "!Sub",
-    "!Sub sequence",
-    "!GetAtt",
-    "!GetAZs",
-    "!ImportValue",
-    "!ImportValue sequence",
-    "!Select",
-    "!Select sequence",
-    "!Split",
-    "!Split sequence"
-  ]
+  "files.associations": {
+    "*.coco": "coconut"
+  }
 }

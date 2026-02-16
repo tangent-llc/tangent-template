@@ -1,0 +1,333 @@
+#!/usr/bin/env coconut-run
+"""
+Full repo audit — walk every file, classify as KEEP/DELETE/UPDATE/REVIEW.
+
+Checks for:
+  - Legacy TurboRepo/pnpm/Poetry artifacts
+  - Stale references to Biome, black, autopep8, etc. in any text file
+  - Compiled caches (__pycache__, __coconut_cache__)
+  - Missing expected files
+  - Broken internal references
+
+Usage:
+    coconut-run scripts/repo_audit.coco              # Full audit report
+    coconut-run scripts/repo_audit.coco --stale      # Only show stale references
+    coconut-run scripts/repo_audit.coco --deletable  # Only show DELETE candidates
+
+Outputs a report. Does NOT modify any files.
+"""
+
+import sys
+import os
+import re
+from pathlib import Path
+from typing import List, Tuple, Set, Dict, Optional
+
+# --- Types ---
+
+data Finding(path: str, verdict: str, reason: str)
+# verdict: "KEEP" | "DELETE" | "UPDATE" | "REVIEW"
+
+# --- Constants ---
+
+# Directories to skip entirely
+SKIP_DIRS: Set[str] = {
+    ".git", "node_modules", ".next", "dist", "build",
+    ".vercel", ".turbo", "coverage",
+}
+
+# Legacy files/dirs that should be deleted
+LEGACY_DELETE: Dict[str, str] = {
+    "turbo.json": "TurboRepo config — replaced by Bun scripts",
+    "pnpm-workspace.yaml": "pnpm workspaces — replaced by Bun",
+    "pnpm-lock.yaml": "pnpm lockfile — Bun uses bun.lockb",
+    "poetry.lock": "Poetry lockfile — replaced by uv",
+    "biome.json": "Biome config — Prettier+ESLint replaces it",
+    "biome.jsonc": "Biome config — Prettier+ESLint replaces it",
+}
+
+# Legacy directories
+LEGACY_DIRS: Dict[str, str] = {
+    "apps": "old TurboRepo monorepo member",
+    "packages": "old TurboRepo shared packages",
+    "__coconut_cache__": "compiled Coconut cache — should be gitignored",
+    "__pycache__": "Python bytecode cache — should be gitignored",
+}
+
+# Stale terms to search for in text files
+STALE_TERMS: Dict[str, str] = {
+    "biome": "should be Prettier+ESLint",
+    "Biome": "should be Prettier+ESLint",
+    "biomejs": "should be Prettier+ESLint",
+    "poetry": "should be uv",
+    "Poetry": "should be uv",
+    "pnpm": "should be bun",
+    "turbo": "should be removed (not monorepo)",
+    "TurboRepo": "should be removed",
+    "Turborepo": "should be removed",
+    "autopep8": "should be Ruff",
+    "flake8": "should be Ruff",
+    "pylint": "should be Ruff",
+    "isort": "should be Ruff",
+    "rome.rome": "dead formatter reference",
+    "diff-so-fancy": "should be delta",
+    "pyenv": "should be uv",
+    "deadsnakes": "should be removed",
+    "npx ": "should be bunx",
+    "npm run": "should be bun run",
+    "npm install": "should be bun install or bun add",
+}
+
+# Files that SHOULD exist
+EXPECTED_FILES: List[str] = [
+    "CLAUDE.md",
+    "README.md",
+    ".prettierrc",
+    "eslint.config.mjs",
+    "tsconfig.json",
+    ".editorconfig",
+    ".gitignore",
+    "package.json",
+    "next.config.ts",
+    ".prettierignore",
+    "postcss.config.mjs",
+    ".vscode/settings.json",
+    ".vscode/extensions.json",
+    "scripts/precommit.coco",
+    "scripts/health_check.coco",
+    "scripts/verify_formatters.coco",
+    "scripts/scaffold.coco",
+    "scripts/sync_template.coco",
+    "scripts/setup_vscode_env.coco",
+    "scripts/bootstrap_windows.coco",
+    "src/app/page.tsx",
+    "src/app/layout.tsx",
+    ".devcontainer/Dockerfile",
+    ".devcontainer/devcontainer.json",
+    ".devcontainer/docker-compose.yml",
+]
+
+# Text file extensions to scan for stale references
+TEXT_EXTENSIONS: Set[str] = {
+    ".md", ".json", ".jsonc", ".mjs", ".js", ".ts", ".tsx",
+    ".jsx", ".css", ".yaml", ".yml", ".toml", ".coco",
+    ".fish", ".sh", ".txt", ".cfg", ".ini", ".env",
+}
+
+
+# --- Helpers ---
+
+def find_root() -> Path:
+    """Find project root."""
+    p = Path.cwd()
+    for parent in [p] + list(p.parents):
+        if (parent / ".git").exists() or (parent / "package.json").exists():
+            return parent
+    return p
+
+
+def should_skip(path: Path) -> bool:
+    """Check if path is in a skipped directory."""
+    return any(part in SKIP_DIRS for part in path.parts)
+
+
+def scan_stale_references(file_path: Path, root: Path) -> List[Finding]:
+    """Scan a text file for stale term references."""
+    results: List[Finding] = []
+    try:
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+        rel = str(file_path.relative_to(root))
+        lines = content.splitlines()
+
+        for line_num, line in enumerate(lines, 1):
+            for term, replacement in STALE_TERMS.items():
+                if term in line:
+                    # Skip if it's in a "replaced by" / "not used" / "unwanted" context
+                    lower_line = line.lower()
+                    if any(skip in lower_line for skip in [
+                        "not biome", "not used", "replaced", "unwanted",
+                        "do not", "don't", "removed", "was ", "old ",
+                        "no longer", "instead of", "replaces",
+                    ]):
+                        continue
+                    results.append(Finding(
+                        f"{rel}:{line_num}",
+                        "UPDATE",
+                        f"stale reference '{term}' → {replacement}: {line.strip()[:80]}"
+                    ))
+    except Exception as e:
+        results.append(Finding(str(file_path.relative_to(root)), "REVIEW", f"read error: {e}"))
+
+    return results
+
+
+def audit_file(file_path: Path, root: Path) -> Finding:
+    """Classify a single file."""
+    rel = str(file_path.relative_to(root))
+    name = file_path.name
+
+    # Check against known legacy files
+    if name in LEGACY_DELETE:
+        return Finding(rel, "DELETE", LEGACY_DELETE[name])
+
+    # Check parent dir
+    for legacy_dir, reason in LEGACY_DIRS.items():
+        if legacy_dir in file_path.parts:
+            return Finding(rel, "DELETE", f"inside legacy dir {legacy_dir}/ — {reason}")
+
+    # Compiled artifacts
+    if name.endswith(".pyc"):
+        return Finding(rel, "DELETE", "compiled Python bytecode")
+
+    # Check for .py in scripts/ (should be .coco)
+    if "scripts" in file_path.parts and name.endswith(".py") and not name.startswith("__"):
+        return Finding(rel, "UPDATE", ".py in scripts/ — should be .coco")
+
+    # pyproject.toml needs review
+    if name == "pyproject.toml":
+        return Finding(rel, "REVIEW", "check if Poetry-only or has uv-relevant metadata")
+
+    # docker-compose.yml needs review for agent services
+    if name == "docker-compose.yml":
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            if "agentgpt" in content.lower() or "superagi" in content.lower() or "weaviate" in content.lower():
+                return Finding(rel, "UPDATE", "contains commented-out agent services — strip them")
+            return Finding(rel, "KEEP", "docker-compose devcontainer service")
+        except Exception:
+            return Finding(rel, "REVIEW", "could not read")
+
+    return Finding(rel, "KEEP", f"{file_path.stat().st_size} bytes")
+
+
+def audit_expected(root: Path) -> List[Finding]:
+    """Check that expected files exist."""
+    results: List[Finding] = []
+    for expected in EXPECTED_FILES:
+        full = root / expected
+        if full.exists():
+            results.append(Finding(expected, "KEEP", "present"))
+        else:
+            results.append(Finding(expected, "REVIEW", "MISSING — expected file not found"))
+    return results
+
+
+# --- Printers ---
+
+def print_findings(findings: List[Finding], filter_verdict: Optional[str] = None) -> Tuple[int, int, int, int]:
+    """Print findings with counts."""
+    keep = delete = update = review = 0
+    markers = {
+        "KEEP": "[+]",
+        "DELETE": "[X]",
+        "UPDATE": "[~]",
+        "REVIEW": "[?]",
+    }
+
+    for f in findings:
+        match f.verdict:
+            case "KEEP":   keep += 1
+            case "DELETE": delete += 1
+            case "UPDATE": update += 1
+            case "REVIEW": review += 1
+
+        if filter_verdict and f.verdict != filter_verdict:
+            continue
+
+        marker = markers.get(f.verdict, "[?]")
+        print(f"  {marker} {f.verdict:8s} {f.path}")
+        if f.verdict != "KEEP":
+            print(f"           → {f.reason}")
+
+    return (keep, delete, update, review)
+
+
+# --- Main ---
+
+def main(args: list) -> int:
+    root = find_root()
+    show_stale = "--stale" in args
+    show_deletable = "--deletable" in args
+
+    print(f"\n{'='*64}")
+    print(f"  Repo Audit: {root}")
+    print(f"{'='*64}\n")
+
+    findings: List[Finding] = []
+
+    # 1. Walk all files
+    print("  Scanning files...")
+    file_count = 0
+    for path in sorted(root.rglob("*")):
+        if should_skip(path):
+            continue
+        if path.is_file():
+            file_count += 1
+            findings.append(audit_file(path, root))
+
+    print(f"  Scanned {file_count} files\n")
+
+    # 2. Check expected files
+    print("  Checking expected files...")
+    expected_findings = audit_expected(root)
+    missing = [f for f in expected_findings if f.verdict == "REVIEW"]
+    if missing:
+        print(f"  {len(missing)} expected files missing\n")
+    else:
+        print(f"  All {len(EXPECTED_FILES)} expected files present\n")
+
+    # 3. Scan for stale references in text files
+    print("  Scanning for stale references...")
+    stale_findings: List[Finding] = []
+    for path in sorted(root.rglob("*")):
+        if should_skip(path):
+            continue
+        if path.is_file() and path.suffix in TEXT_EXTENSIONS:
+            stale_findings.extend(scan_stale_references(path, root))
+
+    if stale_findings:
+        print(f"  Found {len(stale_findings)} stale references\n")
+    else:
+        print(f"  No stale references found\n")
+
+    # Combine all findings
+    all_findings = findings + [f for f in expected_findings if f.verdict == "REVIEW"] + stale_findings
+
+    # Print based on filter
+    print(f"{'='*64}")
+    if show_stale:
+        print("  STALE REFERENCES ONLY\n")
+        print_findings(stale_findings)
+    elif show_deletable:
+        print("  DELETE CANDIDATES ONLY\n")
+        print_findings(all_findings, "DELETE")
+    else:
+        print("  FILE AUDIT\n")
+        # Print DELETE first, then UPDATE, then REVIEW, then KEEP
+        for verdict in ["DELETE", "UPDATE", "REVIEW"]:
+            section = [f for f in all_findings if f.verdict == verdict]
+            if section:
+                print(f"\n  --- {verdict} ({len(section)}) ---\n")
+                print_findings(section, verdict)
+
+        keep_count = len([f for f in all_findings if f.verdict == "KEEP"])
+        print(f"\n  --- KEEP ({keep_count}) --- (not listed, all clean)\n")
+
+    # Summary
+    keep, delete, update, review = 0, 0, 0, 0
+    for f in all_findings:
+        match f.verdict:
+            case "KEEP":   keep += 1
+            case "DELETE": delete += 1
+            case "UPDATE": update += 1
+            case "REVIEW": review += 1
+
+    print(f"\n{'='*64}")
+    print(f"  Summary: {keep} keep / {delete} delete / {update} update / {review} review")
+    print(f"{'='*64}\n")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

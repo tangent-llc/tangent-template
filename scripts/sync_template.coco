@@ -1,0 +1,375 @@
+#!/usr/bin/env coconut-run
+"""
+Detect config drift between this project and tangent-template.
+
+Compares tracked config files against the template's canonical versions.
+Shows what changed, what's missing, and what was added locally.
+
+Usage:
+    coconut-run scripts/sync_template.coco                           # Compare (default)
+    coconut-run scripts/sync_template.coco --template /path/to/template  # Explicit path
+    coconut-run scripts/sync_template.coco --fetch                   # Clone template to /tmp first
+    coconut-run scripts/sync_template.coco --apply                   # Overwrite drifted configs
+
+Tracked files (changes in template should propagate):
+  - .vscode/settings.json
+  - .vscode/extensions.json
+  - .prettierrc
+  - .prettierignore
+  - eslint.config.mjs
+  - tsconfig.json
+  - .markdownlint.json
+  - .claude/settings.json (permissions section only)
+  - .dockerignore
+  - scripts/bootstrap_windows.coco
+  - scripts/health_check.coco
+  - scripts/precommit.coco
+
+NOT tracked (project-specific, never overwrite):
+  - CLAUDE.md (customized per project)
+  - package.json
+  - .env.local / .env.example
+  - scripts/scaffold.coco
+  - .devcontainer/* (may diverge per project)
+"""
+
+import sys
+import os
+import json
+import subprocess
+import hashlib
+import tempfile
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+# --- Config ---
+
+# Files that should stay in sync with template
+TRACKED_FILES: List[str] = [
+    ".vscode/settings.json",
+    ".vscode/extensions.json",
+    ".prettierrc",
+    ".prettierignore",
+    "eslint.config.mjs",
+    "tsconfig.json",
+    ".markdownlint.json",
+    ".dockerignore",
+    "scripts/bootstrap_windows.coco",
+    "scripts/health_check.coco",
+    "scripts/precommit.coco",
+    "scripts/setup_vscode_env.coco",
+]
+
+# Files tracked but only specific sections should match
+PARTIAL_TRACKED: Dict[str, str] = {
+    ".claude/settings.json": "permissions",  # Only permissions section
+}
+
+# Template repo
+TEMPLATE_REPO = "https://github.com/tangent-berlin/tangent-template.git"
+TEMPLATE_BRANCH = "main"
+
+data DriftResult(
+    path: str,
+    status: str,         # "match" | "drifted" | "missing_local" | "missing_template" | "new_local"
+    detail: str,
+    local_hash: Optional[str] = None,
+    template_hash: Optional[str] = None,
+)
+
+
+def run_cmd(cmd: str, timeout: int = 30) -> Tuple[int, str, str]:
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        return (r.returncode, r.stdout.strip(), r.stderr.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return (1, "", str(e))
+
+
+def find_root() -> Path:
+    code, stdout, _ = run_cmd("git rev-parse --show-toplevel")
+    if code == 0 and stdout:
+        return Path(stdout)
+    p = Path.cwd()
+    for parent in [p] + list(p.parents):
+        if (parent / ".git").exists():
+            return parent
+    return p
+
+
+def file_hash(path: Path) -> Optional[str]:
+    """SHA256 of file content (normalized: strip trailing whitespace, ensure LF)."""
+    if not path.exists():
+        return None
+    try:
+        content = path.read_text(encoding="utf-8")
+        # Normalize for cross-platform comparison
+        content = "\n".join(line.rstrip() for line in content.splitlines())
+        content = content.strip() + "\n"
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+    except Exception:
+        return None
+
+
+def json_section_hash(path: Path, section: str) -> Optional[str]:
+    """Hash only a specific top-level section of a JSON file."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        section_data = data.get(section)
+        if section_data is None:
+            return None
+        content = json.dumps(section_data, sort_keys=True, indent=2)
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+    except Exception:
+        return None
+
+
+def diff_files(local: Path, template: Path) -> str:
+    """Get a human-readable diff between two files."""
+    if not local.exists() or not template.exists():
+        return ""
+
+    # Try git diff first (better output)
+    code, stdout, _ = run_cmd(f'git diff --no-index --stat "{template}" "{local}"')
+    if code == 0:
+        return "identical"
+
+    # Get line-level diff
+    code, stdout, _ = run_cmd(f'git diff --no-index --shortstat "{template}" "{local}"')
+    return stdout if stdout else "files differ"
+
+
+def fetch_template(target_dir: Optional[Path] = None) -> Optional[Path]:
+    """Clone template repo to temp directory."""
+    if target_dir is None:
+        target_dir = Path(tempfile.mkdtemp(prefix="tangent-template-"))
+
+    print(f"  Fetching template from {TEMPLATE_REPO}...")
+    code, _, stderr = run_cmd(
+        f'git clone --depth 1 --branch {TEMPLATE_BRANCH} "{TEMPLATE_REPO}" "{target_dir}"',
+        timeout=60
+    )
+
+    if code != 0:
+        print(f"  [X] Clone failed: {stderr[:100]}")
+        return None
+
+    print(f"  [+] Template cloned to {target_dir}")
+    return target_dir
+
+
+def compare_files(local_root: Path, template_root: Path) -> List[DriftResult]:
+    """Compare all tracked files between local and template."""
+    results: List[DriftResult] = []
+
+    # Full file comparisons
+    for rel_path in TRACKED_FILES:
+        local_path = local_root / rel_path
+        template_path = template_root / rel_path
+
+        l_hash = file_hash(local_path)
+        t_hash = file_hash(template_path)
+
+        if l_hash is None and t_hash is None:
+            continue  # Neither has it
+        elif l_hash is None:
+            results.append(DriftResult(
+                rel_path, "missing_local",
+                "exists in template but not locally",
+                template_hash=t_hash
+            ))
+        elif t_hash is None:
+            results.append(DriftResult(
+                rel_path, "new_local",
+                "exists locally but not in template (project-specific?)",
+                local_hash=l_hash
+            ))
+        elif l_hash == t_hash:
+            results.append(DriftResult(
+                rel_path, "match", "in sync",
+                local_hash=l_hash, template_hash=t_hash
+            ))
+        else:
+            detail = diff_files(local_path, template_path)
+            results.append(DriftResult(
+                rel_path, "drifted",
+                f"content differs ({detail})",
+                local_hash=l_hash, template_hash=t_hash
+            ))
+
+    # Partial section comparisons
+    for rel_path, section in PARTIAL_TRACKED.items():
+        local_path = local_root / rel_path
+        template_path = template_root / rel_path
+
+        l_hash = json_section_hash(local_path, section)
+        t_hash = json_section_hash(template_path, section)
+
+        if l_hash is None and t_hash is None:
+            continue
+        elif l_hash is None:
+            results.append(DriftResult(
+                f"{rel_path} [{section}]", "missing_local",
+                f"section '{section}' missing locally",
+                template_hash=t_hash
+            ))
+        elif t_hash is None:
+            results.append(DriftResult(
+                f"{rel_path} [{section}]", "new_local",
+                f"section '{section}' not in template",
+                local_hash=l_hash
+            ))
+        elif l_hash == t_hash:
+            results.append(DriftResult(
+                f"{rel_path} [{section}]", "match",
+                f"section '{section}' in sync",
+                local_hash=l_hash, template_hash=t_hash
+            ))
+        else:
+            results.append(DriftResult(
+                f"{rel_path} [{section}]", "drifted",
+                f"section '{section}' differs",
+                local_hash=l_hash, template_hash=t_hash
+            ))
+
+    return results
+
+
+def apply_updates(local_root: Path, template_root: Path, results: List[DriftResult]) -> None:
+    """Copy drifted/missing files from template to local."""
+    drifted = [r for r in results if r.status in ("drifted", "missing_local")]
+
+    if not drifted:
+        print("\n  [+] Nothing to apply")
+        return
+
+    print(f"\n--- Applying {len(drifted)} updates ---\n")
+
+    for result in drifted:
+        # Handle partial tracked files differently
+        if "[" in result.path:
+            base_path = result.path.split(" [")[0]
+            print(f"  [~] {result.path}: partial sync not auto-applied")
+            print(f"      Manually compare: {base_path}")
+            continue
+
+        src = template_root / result.path
+        dst = local_root / result.path
+
+        if not src.exists():
+            continue
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            content = src.read_text(encoding="utf-8")
+            dst.write_text(content, encoding="utf-8")
+            print(f"  [+] {result.path}: updated from template")
+        except Exception as e:
+            print(f"  [X] {result.path}: {e}")
+
+
+def get_arg(args: list, flag: str) -> Optional[str]:
+    for i, a in enumerate(args):
+        if a == flag and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith(f"{flag}="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def main(args: list) -> int:
+    local_root = find_root()
+    do_apply = "--apply" in args
+    do_fetch = "--fetch" in args
+    template_path = get_arg(args, "--template")
+
+    print(f"\n{'=' * 64}")
+    print(f"  Template Drift Detection")
+    print(f"  Project: {local_root}")
+    print(f"{'=' * 64}")
+
+    # Resolve template location
+    template_root: Optional[Path] = None
+
+    if template_path:
+        template_root = Path(template_path)
+        if not template_root.exists():
+            print(f"\n  [X] Template path not found: {template_root}")
+            return 1
+        print(f"  Template: {template_root}")
+    elif do_fetch:
+        template_root = fetch_template()
+        if template_root is None:
+            return 1
+    else:
+        # Try common locations
+        candidates = [
+            local_root.parent / "tangent-template",
+            Path.home() / "tangent-template",
+            Path(tempfile.gettempdir()) / "tangent-template",
+        ]
+        for c in candidates:
+            if c.exists() and (c / ".git").exists() and c != local_root:
+                template_root = c
+                print(f"  Template: {template_root} (auto-detected)")
+                break
+
+        if template_root is None:
+            print("\n  [!] Template not found. Options:")
+            print(f"      --template /path/to/tangent-template")
+            print(f"      --fetch  (clone from GitHub)")
+            print(f"      Clone to: {local_root.parent / 'tangent-template'}")
+            return 1
+
+    # Compare
+    print(f"\n  --- Comparing {len(TRACKED_FILES) + len(PARTIAL_TRACKED)} tracked configs ---\n")
+
+    results = compare_files(local_root, template_root)
+
+    # Print results
+    symbols = {
+        "match": "[+]",
+        "drifted": "[~]",
+        "missing_local": "[X]",
+        "missing_template": "[-]",
+        "new_local": "[?]",
+    }
+
+    match_count = len([r for r in results if r.status == "match"])
+    drift_count = len([r for r in results if r.status == "drifted"])
+    missing_count = len([r for r in results if r.status == "missing_local"])
+    new_count = len([r for r in results if r.status == "new_local"])
+
+    # Show non-matching first
+    for r in results:
+        if r.status != "match":
+            hash_info = ""
+            if r.local_hash and r.template_hash:
+                hash_info = f" ({r.local_hash} vs {r.template_hash})"
+            print(f"  {symbols[r.status]} {r.path}: {r.detail}{hash_info}")
+
+    # Then matching (compact)
+    if match_count > 0:
+        print(f"\n  [+] {match_count} files in sync")
+
+    # Summary
+    print(f"\n{'=' * 64}")
+    print(f"  {match_count} in sync / {drift_count} drifted / {missing_count} missing / {new_count} local-only")
+    print(f"{'=' * 64}")
+
+    if drift_count > 0 or missing_count > 0:
+        if do_apply:
+            apply_updates(local_root, template_root, results)
+            print("\n  Run health_check.coco to verify updates")
+        else:
+            print(f"\n  To update: coconut-run scripts/sync_template.coco --apply --template \"{template_root}\"")
+
+    print()
+    return 1 if missing_count > 0 else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

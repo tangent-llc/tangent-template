@@ -1,0 +1,321 @@
+#!/usr/bin/env coconut-run
+"""
+Git pre-commit hook: lint and format staged files only.
+
+Runs the correct tool per file type (matching CLAUDE.md formatter routing):
+  JS/TS/JSX/TSX/CSS/JSON  --> prettier --check + eslint
+  Python/Coconut           --> ruff check
+  Markdown                 --> markdownlint
+
+Installation:
+    coconut-run scripts/precommit.coco --install    # symlinks into .git/hooks
+    coconut-run scripts/precommit.coco              # manual run (checks staged)
+    coconut-run scripts/precommit.coco --all        # check all tracked files
+
+Called automatically by git after --install.
+Only checks staged files (git diff --cached), so it's fast.
+Exit 0 = commit proceeds. Exit 1 = commit blocked.
+"""
+
+import sys
+import os
+import subprocess
+from pathlib import Path
+from typing import List, Tuple, Dict, Set
+
+# --- File type routing (mirrors CLAUDE.md formatter table) ---
+
+PRETTIER_EXTENSIONS: Set[str] = {".js", ".jsx", ".ts", ".tsx", ".css", ".json"}
+ESLINT_EXTENSIONS: Set[str] = {".js", ".jsx", ".ts", ".tsx"}
+RUFF_EXTENSIONS: Set[str] = {".py", ".pyi"}
+COCONUT_EXTENSIONS: Set[str] = {".coco"}
+MARKDOWNLINT_EXTENSIONS: Set[str] = {".md"}
+
+# Files to always skip
+SKIP_PATTERNS: Set[str] = {
+    "bun.lockb", "package-lock.json", "yarn.lock",
+    ".env", ".env.local", ".env.production",
+}
+
+
+def run_cmd(cmd: str, timeout: int = 30) -> Tuple[int, str, str]:
+    """Run command, return (code, stdout, stderr)."""
+    try:
+        r = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+        )
+        return (r.returncode, r.stdout.strip(), r.stderr.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return (1, "", str(e))
+
+
+def tool_available(name: str) -> bool:
+    """Check if a CLI tool is available."""
+    check_cmd = f"where {name}" if sys.platform == "win32" else f"which {name}"
+    code, _, _ = run_cmd(check_cmd)
+    return code == 0
+
+
+def get_staged_files() -> List[str]:
+    """Get list of staged files (added, modified, renamed)."""
+    code, stdout, _ = run_cmd("git diff --cached --name-only --diff-filter=ACMR")
+    if code != 0 or not stdout:
+        return []
+    return stdout.splitlines()
+
+
+def get_all_tracked_files() -> List[str]:
+    """Get all tracked files in repo."""
+    code, stdout, _ = run_cmd("git ls-files")
+    if code != 0 or not stdout:
+        return []
+    return stdout.splitlines()
+
+
+def classify_files(files: List[str]) -> Dict[str, List[str]]:
+    """Sort files into tool buckets based on extension."""
+    buckets: Dict[str, List[str]] = {
+        "prettier": [],
+        "eslint": [],
+        "ruff": [],
+        "coconut": [],
+        "markdownlint": [],
+        "skip": [],
+    }
+
+    for f in files:
+        p = Path(f)
+
+        # Skip known non-checkable files
+        if p.name in SKIP_PATTERNS:
+            buckets["skip"].append(f)
+            continue
+
+        # Skip files in ignored directories
+        parts = set(p.parts)
+        if parts & {"node_modules", ".next", "dist", "build", "__coconut_cache__"}:
+            buckets["skip"].append(f)
+            continue
+
+        ext = p.suffix.lower()
+        if ext in PRETTIER_EXTENSIONS:
+            buckets["prettier"].append(f)
+        if ext in ESLINT_EXTENSIONS:
+            buckets["eslint"].append(f)
+        if ext in RUFF_EXTENSIONS:
+            buckets["ruff"].append(f)
+        elif ext in COCONUT_EXTENSIONS:
+            buckets["coconut"].append(f)
+        elif ext in MARKDOWNLINT_EXTENSIONS:
+            buckets["markdownlint"].append(f)
+        # else: not checked (YAML, TOML, images, etc.)
+
+    return buckets
+
+
+def run_prettier(files: List[str]) -> Tuple[bool, str]:
+    """Run prettier --check on files."""
+    if not files:
+        return (True, "")
+
+    for runner in ["bun prettier", "bunx prettier", "npx prettier", "prettier"]:
+        base_cmd = runner.split()[0]
+        if tool_available(base_cmd):
+            file_args = " ".join(f'"{f}"' for f in files)
+            code, stdout, stderr = run_cmd(f"{runner} --check {file_args}")
+            output = stdout or stderr
+            return (code == 0, output)
+
+    return (True, "prettier not found (skipped)")
+
+
+def run_eslint(files: List[str]) -> Tuple[bool, str]:
+    """Run eslint on files."""
+    if not files:
+        return (True, "")
+
+    for runner in ["bun eslint", "bunx eslint", "npx eslint", "eslint"]:
+        base_cmd = runner.split()[0]
+        if tool_available(base_cmd):
+            file_args = " ".join(f'"{f}"' for f in files)
+            code, stdout, stderr = run_cmd(f"{runner} {file_args}")
+            output = stdout or stderr
+            return (code == 0, output)
+
+    return (True, "eslint not found (skipped)")
+
+
+def run_ruff(files: List[str]) -> Tuple[bool, str]:
+    """Run ruff check on files."""
+    if not files:
+        return (True, "")
+
+    if not tool_available("ruff"):
+        return (True, "ruff not found (skipped)")
+
+    file_args = " ".join(f'"{f}"' for f in files)
+    code, stdout, stderr = run_cmd(f"ruff check {file_args}")
+    output = stdout or stderr
+    return (code == 0, output)
+
+
+def run_coconut_check(files: List[str]) -> Tuple[bool, str]:
+    """Syntax-check .coco files."""
+    if not files:
+        return (True, "")
+
+    if not tool_available("coconut"):
+        return (True, "coconut not found (skipped)")
+
+    errors = []
+    for f in files:
+        code, stdout, stderr = run_cmd(f'coconut --strict --target 3.12 --nowrite "{f}"')
+        if code != 0:
+            # Coconut outputs compilation info to stderr even on success
+            if "Error" in stderr or "error" in stderr:
+                errors.append(f"  {f}: {stderr.splitlines()[-1]}")
+
+    if errors:
+        return (False, "\n".join(errors))
+    return (True, "")
+
+
+def run_markdownlint(files: List[str]) -> Tuple[bool, str]:
+    """Run markdownlint on files."""
+    if not files:
+        return (True, "")
+
+    # markdownlint-cli2 (preferred) or markdownlint-cli
+    for runner in ["markdownlint-cli2", "markdownlint"]:
+        if tool_available(runner):
+            file_args = " ".join(f'"{f}"' for f in files)
+            code, stdout, stderr = run_cmd(f"{runner} {file_args}")
+            output = stdout or stderr
+            return (code == 0, output)
+
+    return (True, "markdownlint not found (skipped)")
+
+
+def find_root() -> Path:
+    """Find git root."""
+    code, stdout, _ = run_cmd("git rev-parse --show-toplevel")
+    if code == 0 and stdout:
+        return Path(stdout)
+    return Path.cwd()
+
+
+def install_hook(root: Path) -> None:
+    """Install this script as git pre-commit hook."""
+    hooks_dir = root / ".git" / "hooks"
+    hook_path = hooks_dir / "pre-commit"
+
+    if not hooks_dir.exists():
+        print("[X] .git/hooks not found -- are you in a git repo?")
+        sys.exit(1)
+
+    # Write a shim that calls coconut-run
+    script_rel = os.path.relpath(
+        root / "scripts" / "precommit.coco", root
+    )
+
+    shim_content = f"""#!/bin/sh
+# Auto-generated by precommit.coco --install
+# Runs Coconut pre-commit hook
+coconut-run "{script_rel}"
+exit $?
+"""
+
+    hook_path.write_text(shim_content, encoding="utf-8")
+
+    # Make executable (no-op on Windows but needed for container/WSL)
+    try:
+        hook_path.chmod(0o755)
+    except OSError:
+        pass
+
+    print(f"[+] Installed pre-commit hook at {hook_path}")
+    print(f"    Delegates to: coconut-run {script_rel}")
+
+    # Also configure git to use .githooks if that dir exists
+    githooks_dir = root / ".githooks"
+    if githooks_dir.exists():
+        print(f"[~] Note: .githooks/ exists but hook installed to .git/hooks/")
+        print(f"    To use .githooks/ instead: git config core.hooksPath .githooks")
+
+
+def main(args: list) -> int:
+    root = find_root()
+
+    if "--install" in args:
+        install_hook(root)
+        return 0
+
+    # Determine which files to check
+    check_all = "--all" in args
+
+    if check_all:
+        files = get_all_tracked_files()
+        mode = "all tracked files"
+    else:
+        files = get_staged_files()
+        mode = "staged files"
+
+    if not files:
+        print(f"[+] No {mode} to check")
+        return 0
+
+    # Change to repo root for consistent paths
+    os.chdir(root)
+
+    # Classify files
+    buckets = classify_files(files)
+
+    total = sum(len(v) for v in buckets.values())
+    checkable = total - len(buckets["skip"])
+
+    print(f"Pre-commit: {checkable} files to check ({mode})")
+
+    # Run checks
+    all_passed = True
+    checks_run = 0
+
+    checks = [
+        ("Prettier", "prettier", run_prettier),
+        ("ESLint", "eslint", run_eslint),
+        ("Ruff", "ruff", run_ruff),
+        ("Coconut", "coconut", run_coconut_check),
+        ("Markdownlint", "markdownlint", run_markdownlint),
+    ]
+
+    for label, bucket_key, check_fn in checks:
+        bucket_files = buckets[bucket_key]
+        if not bucket_files:
+            continue
+
+        ok, output = check_fn(bucket_files)
+        checks_run += 1
+
+        if ok:
+            skipped = "(skipped)" if "not found" in output else ""
+            print(f"  [+] {label}: {len(bucket_files)} files {skipped}")
+        else:
+            all_passed = False
+            print(f"  [X] {label}: {len(bucket_files)} files -- FAILED")
+            if output:
+                # Indent output
+                for line in output.splitlines()[:20]:
+                    print(f"      {line}")
+                if len(output.splitlines()) > 20:
+                    print(f"      ... ({len(output.splitlines()) - 20} more lines)")
+
+    if all_passed:
+        print(f"[+] All checks passed ({checks_run} tools, {checkable} files)")
+        return 0
+    else:
+        print(f"[X] Commit blocked -- fix errors above")
+        print(f"    To bypass: git commit --no-verify")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

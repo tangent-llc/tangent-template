@@ -1,0 +1,333 @@
+#!/usr/bin/env coconut-run
+"""
+Bootstrap Windows development environment for tangent-template.
+
+Checks and fixes:
+  1. PYTHONUTF8=1 (prevents encoding crashes like the cp1252 error)
+  2. VSCode 'code' CLI in PATH
+  3. Coconut, uv, bun, git all reachable
+  4. Git config (delta, default branch, user)
+  5. Coconut cache warmup (eliminates cold start penalty)
+
+Usage:
+    coconut-run scripts/bootstrap_windows.coco              # Check only
+    coconut-run scripts/bootstrap_windows.coco --fix        # Apply fixes
+    coconut-run scripts/bootstrap_windows.coco --fix --warmup  # Fix + warm cache
+
+Idempotent: safe to run multiple times.
+"""
+
+import sys
+import os
+import subprocess
+import shutil
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+
+# --- Check definitions ---
+
+data CheckResult(name: str, status: str, detail: str, fix_cmd: Optional[str] = None)
+# status: "ok" | "warn" | "fail"
+
+
+def run_cmd(cmd: str, timeout: int = 10) -> Tuple[int, str, str]:
+    """Run a command and return (returncode, stdout, stderr)."""
+    try:
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+        )
+        return (result.returncode, result.stdout.strip(), result.stderr.strip())
+    except FileNotFoundError:
+        return (1, "", "command not found")
+    except subprocess.TimeoutExpired:
+        return (1, "", "timeout")
+
+
+def check_env_var(name: str, expected: str) -> CheckResult:
+    """Check if an environment variable is set correctly."""
+    actual = os.environ.get(name, "")
+    if actual == expected:
+        return CheckResult(name, "ok", f"{name}={actual}")
+    elif actual:
+        return CheckResult(
+            name, "warn",
+            f"{name}={actual} (expected {expected})",
+            f'[Environment]::SetEnvironmentVariable("{name}", "{expected}", "User")'
+        )
+    else:
+        return CheckResult(
+            name, "fail",
+            f"{name} not set",
+            f'[Environment]::SetEnvironmentVariable("{name}", "{expected}", "User")'
+        )
+
+
+def check_tool(name: str, version_flag: str = "--version") -> CheckResult:
+    """Check if a CLI tool is available and get its version."""
+    code, stdout, stderr = run_cmd(f"{name} {version_flag}")
+    if code == 0:
+        version = (stdout or stderr).splitlines()[0][:60]
+        return CheckResult(name, "ok", version)
+    else:
+        return CheckResult(name, "fail", "not found in PATH")
+
+
+def check_code_cli() -> CheckResult:
+    """Check VSCode 'code' command specifically."""
+    code, stdout, stderr = run_cmd("code --version")
+    if code == 0:
+        version = stdout.splitlines()[0] if stdout else "unknown"
+        return CheckResult("code (VSCode CLI)", "ok", f"v{version}")
+
+    # Check common Windows install paths
+    common_paths = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Microsoft VS Code" / "bin",
+        Path("C:/Program Files/Microsoft VS Code/bin"),
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Microsoft VS Code" / "Code.exe",
+    ]
+
+    found_path = None
+    for p in common_paths:
+        if p.exists():
+            found_path = p
+            break
+
+    if found_path:
+        return CheckResult(
+            "code (VSCode CLI)", "warn",
+            f"VSCode installed at {found_path.parent} but 'code' not in PATH",
+            'Open VSCode -> Ctrl+Shift+P -> "Shell Command: Install code in PATH"'
+        )
+    else:
+        return CheckResult(
+            "code (VSCode CLI)", "fail",
+            "VSCode not found"
+        )
+
+
+def check_git_config(key: str, expected: Optional[str] = None) -> CheckResult:
+    """Check a git config value."""
+    code, stdout, stderr = run_cmd(f"git config --global {key}")
+    if code == 0 and stdout:
+        if expected and stdout != expected:
+            return CheckResult(
+                f"git {key}", "warn",
+                f"'{stdout}' (expected '{expected}')",
+                f'git config --global {key} "{expected}"'
+            )
+        return CheckResult(f"git {key}", "ok", stdout)
+    else:
+        detail = f"not set"
+        fix = f'git config --global {key} "{expected}"' if expected else None
+        return CheckResult(f"git {key}", "fail" if expected else "warn", detail, fix)
+
+
+def check_coconut_cache(scripts_dir: Path) -> CheckResult:
+    """Check if coconut cache exists for scripts."""
+    cache_dir = scripts_dir / "__coconut_cache__"
+    coco_files = list(scripts_dir.glob("*.coco"))
+    cached_files = list(cache_dir.glob("*.py")) if cache_dir.exists() else []
+
+    if not coco_files:
+        return CheckResult("coconut cache", "ok", "no .coco files to cache")
+
+    if len(cached_files) >= len(coco_files):
+        return CheckResult(
+            "coconut cache", "ok",
+            f"{len(cached_files)} cached / {len(coco_files)} scripts"
+        )
+    else:
+        return CheckResult(
+            "coconut cache", "warn",
+            f"{len(cached_files)} cached / {len(coco_files)} scripts (cold start ~2-5s per uncached)",
+            "coconut --target 3.12 --nowrite scripts/*.coco"
+        )
+
+
+def check_long_paths() -> CheckResult:
+    """Check Windows long path support (registry)."""
+    code, stdout, stderr = run_cmd(
+        'reg query "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled'
+    )
+    if code == 0 and "0x1" in stdout:
+        return CheckResult("Long paths", "ok", "enabled")
+    else:
+        return CheckResult(
+            "Long paths", "warn",
+            "not enabled (may cause issues with deep node_modules)",
+            'reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f  (requires admin)'
+        )
+
+
+def run_all_checks(scripts_dir: Path) -> List[CheckResult]:
+    """Run all environment checks."""
+    checks: List[CheckResult] = []
+
+    # Environment variables
+    checks.append(check_env_var("PYTHONUTF8", "1"))
+    checks.append(check_env_var("COCONUT_USE_COLOR", "TRUE"))
+
+    # Core tools
+    checks.append(check_tool("python", "--version"))
+    checks.append(check_tool("coconut", "--version"))
+    checks.append(check_tool("coconut-run", "--version"))
+    checks.append(check_tool("uv", "--version"))
+    checks.append(check_tool("bun", "--version"))
+    checks.append(check_tool("git", "--version"))
+    checks.append(check_code_cli())
+
+    # Git config
+    checks.append(check_git_config("core.pager", "delta"))
+    checks.append(check_git_config("init.defaultBranch", "main"))
+    checks.append(check_git_config("user.name"))
+    checks.append(check_git_config("user.email"))
+    checks.append(check_git_config("core.autocrlf", "input"))
+
+    # System
+    checks.append(check_long_paths())
+
+    # Coconut cache
+    checks.append(check_coconut_cache(scripts_dir))
+
+    return checks
+
+
+def print_results(checks: List[CheckResult]) -> Tuple[int, int, int]:
+    """Print results and return counts."""
+    symbols = {"ok": "[+]", "warn": "[~]", "fail": "[X]"}
+
+    ok_count = len([c for c in checks if c.status == "ok"])
+    warn_count = len([c for c in checks if c.status == "warn"])
+    fail_count = len([c for c in checks if c.status == "fail"])
+
+    print(f"\n{'=' * 64}")
+    print(f"  Windows Environment Check")
+    print(f"  {ok_count} ok / {warn_count} warnings / {fail_count} failures")
+    print(f"{'=' * 64}\n")
+
+    # Group by status
+    for status_label, status_key in [("OK", "ok"), ("WARNINGS", "warn"), ("FAILURES", "fail")]:
+        group = [c for c in checks if c.status == status_key]
+        if not group:
+            continue
+
+        print(f"  {status_label}:")
+        for check in group:
+            print(f"    {symbols[check.status]} {check.name}")
+            print(f"       {check.detail}")
+            if check.fix_cmd and check.status != "ok":
+                print(f"       Fix: {check.fix_cmd}")
+        print()
+
+    return (ok_count, warn_count, fail_count)
+
+
+def apply_fixes(checks: List[CheckResult]) -> None:
+    """Apply automatic fixes where possible."""
+    fixable = [c for c in checks if c.status in ("warn", "fail") and c.fix_cmd]
+
+    if not fixable:
+        print("\n[+] Nothing to fix automatically")
+        return
+
+    print(f"\n--- Applying {len(fixable)} fixes ---\n")
+
+    for check in fixable:
+        # Only auto-apply safe fixes (env vars and git config)
+        if check.fix_cmd is not None and (
+            check.fix_cmd.startswith("git config") or
+            check.fix_cmd.startswith("[Environment]")
+        ):
+            print(f"  Fixing {check.name}...")
+
+            if check.fix_cmd.startswith("[Environment]"):
+                # PowerShell env var — set in current process too
+                match check:
+                    case CheckResult(name=name) if "PYTHONUTF8" in name:
+                        os.environ["PYTHONUTF8"] = "1"
+                    case CheckResult(name=name) if "COCONUT_USE_COLOR" in name:
+                        os.environ["COCONUT_USE_COLOR"] = "TRUE"
+
+                code, _, stderr = run_cmd(f'powershell -Command \'{check.fix_cmd}\'')
+                if code == 0:
+                    print(f"    [+] Set (takes effect in new terminals)")
+                else:
+                    print(f"    [X] Failed: {stderr[:80]}")
+
+            elif check.fix_cmd.startswith("git config"):
+                code, _, stderr = run_cmd(check.fix_cmd)
+                if code == 0:
+                    print(f"    [+] Applied")
+                else:
+                    print(f"    [X] Failed: {stderr[:80]}")
+        else:
+            print(f"  [~] {check.name} -- manual fix required:")
+            print(f"      {check.fix_cmd}")
+
+
+def warmup_cache(scripts_dir: Path) -> None:
+    """Pre-compile all .coco files to eliminate cold start."""
+    coco_files = sorted(scripts_dir.glob("*.coco"))
+    if not coco_files:
+        print("\n[+] No .coco files to warm up")
+        return
+
+    print(f"\n--- Warming Coconut cache ({len(coco_files)} files) ---\n")
+
+    for f in coco_files:
+        print(f"  Compiling {f.name}...", end=" ", flush=True)
+        code, stdout, stderr = run_cmd(
+            f'coconut --target 3.12 --nowrite "{f}"', timeout=30
+        )
+        if code == 0:
+            print("[+]")
+        else:
+            # Coconut outputs compilation info to stderr
+            if "Coconut" in stderr and "Error" not in stderr:
+                print("[+]")
+            else:
+                print(f"[X] {stderr[:80]}")
+
+
+def main(args: list) -> int:
+    """Main entry point."""
+
+    do_fix = "--fix" in args
+    do_warmup = "--warmup" in args
+
+    # Find project root
+    project_root = Path.cwd()
+    for parent in [project_root] + list(project_root.parents):
+        if (parent / ".git").exists() or (parent / "package.json").exists():
+            project_root = parent
+            break
+
+    scripts_dir = project_root / "scripts"
+
+    print(f"  Project: {project_root}")
+    print(f"  Platform: {sys.platform}")
+    print(f"  Python: {sys.version.split()[0]}")
+
+    # Run checks
+    checks = run_all_checks(scripts_dir)
+    ok, warns, fails = print_results(checks)
+
+    # Apply fixes
+    if do_fix:
+        apply_fixes(checks)
+        print("\n  Re-run without --fix to verify fixes took effect")
+
+    # Warm cache
+    if do_warmup:
+        warmup_cache(scripts_dir)
+
+    # Summary
+    if not do_fix and (warns > 0 or fails > 0):
+        print("  Run with --fix to apply automatic fixes")
+        print("  Run with --fix --warmup to also pre-compile Coconut scripts")
+
+    return 1 if fails > 0 else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

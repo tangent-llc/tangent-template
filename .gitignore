@@ -1,79 +1,70 @@
-# Monorepo
-#  .gitignore for monorepo with node and python projects
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
 
-# chache
-.cache/
-!.cache/.gitignore
+# Build
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
 
-# dependencies
-**/node_modules/
-!**/node_modules/.gitignore
-**/*.bun
-**/.pnpm-store/
-**/.pnp
-**/.pnp.js
+# Bun
+bun.lockb
 
-# Node build artifacts
-**/.turbo/
-**/.next/
-**/.vercel/
-**/.contentlayer
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Byte-compiled / optimized / DLL files
-**/__pycache__/
-**/*.py[cod]
-**/*$py.class
+# Python
+__pycache__/
+__coconut_cache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
 
-# C extensions
-**/*.so
+# IDE
+.idea/
+*.swp
+*.swo
+*~
 
-# Distribution / packaging
-.Python
-**/build/
-**/develop-eggs/
-**/dist/
-**/downloads/
-**/eggs/
-**/.eggs/
-**/lib/
-**/lib64/
-**/parts/
-**/sdist/
-**/var/
-**/wheels/
-**/share/python-wheels/
-**/*.egg-info/
-**/.installed.cfg
-**/*.egg
-**/MANIFEST
+# OS
+.DS_Store
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+nul
 
-# PyInstaller
-**/*.manifest
-**/*.spec
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# misc
-**/.DS_Store
-**/*.pem
+# Supabase
+.supabase/
 
-# debug
-**/*.log
-**/npm-debug.log*
-**/yarn-debug.log*
-**/yarn-error.log*
+# Claude Code
+.claude/settings.local.json
+.claude/tmp_*
+tmpclaude*
 
-# local env files
-**/.env.local
-**/.env.development.local
-**/.env.test.local
-**/.env.production.local
+# OneDrive conflicts
+*-conflict-*
+~$*
 
-# Unit test / coverage reports
-**/htmlcov/
-**/.tox/
-**/.nox/
-**/.coverage
-**/.coverage.*
-**/.cache
-**/nosetests.xml
-**/coverage.xml
-**/*.cover
+# Misc
+*.log
+*.tmp
+*.bak
+.vercel
+.turbo
+coverage/

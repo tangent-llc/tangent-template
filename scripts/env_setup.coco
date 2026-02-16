@@ -1,0 +1,555 @@
+#!/usr/bin/env coconut-run
+"""
+Full environment inventory + setup for Windows work PC.
+
+Phases:
+  1. --inventory    Capture winget list, pip list, VSCode extensions to INVENTORY_BEFORE.md
+  2. --install      Install/upgrade all tools (winget, pip, VSCode extensions, env vars)
+  3. --verify       Verify everything installed correctly
+  4. --all          Run all phases in order
+
+Usage:
+    coconut-run scripts/env_setup.coco --inventory
+    coconut-run scripts/env_setup.coco --install
+    coconut-run scripts/env_setup.coco --verify
+    coconut-run scripts/env_setup.coco --all
+
+Idempotent: safe to run multiple times.
+"""
+
+import sys
+import os
+import subprocess
+import shutil
+from pathlib import Path
+from datetime import datetime
+from typing import Tuple, Optional
+
+# --- Types ---
+
+data Result(name: str, status: str, detail: str)
+# status: "ok" | "fail" | "skip" | "warn"
+
+
+# --- Helpers ---
+
+def run_cmd(cmd: str, timeout: int = 120) -> Tuple[int, str, str]:
+    """Run a command, return (returncode, stdout, stderr)."""
+    try:
+        r = subprocess.run(
+            cmd, shell=True, capture_output=True, timeout=timeout, encoding='utf-8', errors='replace'
+        )
+        stdout = r.stdout.strip() if r.stdout else ""
+        stderr = r.stderr.strip() if r.stderr else ""
+        return (r.returncode, stdout, stderr)
+    except FileNotFoundError:
+        return (1, "", "command not found")
+    except subprocess.TimeoutExpired:
+        return (1, "", f"timeout after {timeout}s")
+    except UnicodeDecodeError:
+        return (1, "", "unicode decode error")
+
+
+def has_tool(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def print_result(r: Result) -> None:
+    match r.status:
+        case "ok":   print(f"  [+] {r.name}: {r.detail}")
+        case "fail": print(f"  [X] {r.name}: {r.detail}")
+        case "skip": print(f"  [-] {r.name}: {r.detail}")
+        case "warn": print(f"  [!] {r.name}: {r.detail}")
+
+
+def find_root() -> Path:
+    p = Path.cwd()
+    for parent in [p] + list(p.parents):
+        if (parent / ".git").exists() or (parent / "package.json").exists():
+            return parent
+    return p
+
+
+def section(title: str) -> None:
+    print(f"\n  --- {title} ---")
+
+
+# ================================================================
+#  PHASE 1: INVENTORY
+# ================================================================
+
+def phase_inventory(root: Path) -> list:
+    """Capture current state to INVENTORY_BEFORE.md"""
+    results: list = []
+    outfile = root / "INVENTORY_BEFORE.md"
+    timestamp = datetime.now().isoformat()
+
+    print(f"\n{'='*64}")
+    print(f"  Environment Inventory")
+    print(f"  Root: {root}")
+    print(f"  Time: {timestamp}")
+    print(f"{'='*64}")
+
+    lines: list = [f"# Inventory Before -- {timestamp}\n"]
+
+    # winget list
+    section("winget list")
+    code, out, err = run_cmd("winget list", timeout=60)
+    if code == 0:
+        lines.append("\n## winget list\n```\n" + out + "\n```\n")
+        line_count = len(out.splitlines())
+        results.append(Result("winget list", "ok", f"{line_count} entries"))
+    else:
+        lines.append("\n## winget list\n```\nERROR: " + err + "\n```\n")
+        results.append(Result("winget list", "fail", err))
+
+    # pip list
+    section("pip list")
+    code, out, err = run_cmd("pip list")
+    if code == 0:
+        lines.append("\n## pip list\n```\n" + out + "\n```\n")
+        pkg_count = max(0, len(out.splitlines()) - 2)
+        results.append(Result("pip list", "ok", f"{pkg_count} packages"))
+    else:
+        lines.append("\n## pip list\n```\nERROR: " + err + "\n```\n")
+        results.append(Result("pip list", "fail", err))
+
+    # pip list --outdated
+    section("pip list --outdated")
+    code, out, err = run_cmd("pip list --outdated")
+    if code == 0:
+        lines.append("\n## pip list --outdated\n```\n" + out + "\n```\n")
+        outdated_count = max(0, len(out.splitlines()) - 2)
+        results.append(Result("pip outdated", "ok", f"{outdated_count} outdated"))
+    else:
+        lines.append("\n## pip list --outdated\n```\nERROR: " + err + "\n```\n")
+        results.append(Result("pip outdated", "warn", err))
+
+    # pip list --user
+    section("pip list --user")
+    code, out, err = run_cmd("pip list --user")
+    if code == 0:
+        lines.append("\n## pip list --user\n```\n" + out + "\n```\n")
+        user_count = max(0, len(out.splitlines()) - 2)
+        results.append(Result("pip user", "ok", f"{user_count} user-installed"))
+    else:
+        lines.append("\n## pip list --user\n```\n" + out + "\n```\n")
+        results.append(Result("pip user", "warn", err or "no user packages"))
+
+    # VSCode extensions
+    section("VSCode extensions")
+    code, out, err = run_cmd("code --list-extensions --show-versions")
+    if code == 0:
+        lines.append("\n## VSCode extensions\n```\n" + out + "\n```\n")
+        ext_count = len(out.splitlines())
+        results.append(Result("VSCode extensions", "ok", f"{ext_count} extensions"))
+    else:
+        lines.append("\n## VSCode extensions\n```\nERROR: code CLI not in PATH\n```\n")
+        results.append(Result("VSCode extensions", "fail", "code CLI not in PATH"))
+
+    # Environment variables
+    section("Environment variables")
+    env_vars = [
+        "PYTHONUTF8", "COCONUT_USE_COLOR", "EDITOR", "VISUAL",
+        "CLAUDE_CODE_GIT_BASH_PATH", "XDG_CONFIG_HOME",
+        "PYTHONIOENCODING", "PAGER", "SHELL", "TERM"
+    ]
+    env_lines: list = []
+    for var in env_vars:
+        val = os.environ.get(var, "(not set)")
+        env_lines.append(f"{var}={val}")
+    lines.append("\n## Environment variables\n```\n" + "\n".join(env_lines) + "\n```\n")
+    results.append(Result("env vars", "ok", f"{len(env_vars)} checked"))
+
+    # Write file
+    outfile.write_text("\n".join(lines), encoding="utf-8")
+    results.append(Result("INVENTORY_BEFORE.md", "ok", f"saved ({len(lines)} lines)"))
+
+    for r in results:
+        print_result(r)
+
+    return results
+
+
+# ================================================================
+#  PHASE 2: INSTALL
+# ================================================================
+
+def run_install(name: str, cmd: str, timeout: int = 300) -> Result:
+    """Run an install command, return result."""
+    code, out, err = run_cmd(cmd, timeout=timeout)
+    if code == 0:
+        return Result(name, "ok", "installed")
+    else:
+        combined = (out + " " + err).lower()
+        if "already installed" in combined or "no available upgrade" in combined:
+            return Result(name, "skip", "already installed/current")
+        elif "no newer package" in combined or "up-to-date" in combined or "no applicable" in combined:
+            return Result(name, "skip", "already up to date")
+        else:
+            err_line = (err or out).split("\n")[0][:100]
+            return Result(name, "fail", err_line)
+
+
+def phase_install() -> list:
+    """Install/upgrade all tools."""
+    results: list = []
+
+    print(f"\n{'='*64}")
+    print(f"  Environment Setup -- Install Phase")
+    print(f"{'='*64}")
+
+    # --- 2a. Environment variables (setx) ---
+    section("Environment variables (setx)")
+    env_settings = [
+        ("PYTHONUTF8", "1"),
+        ("COCONUT_USE_COLOR", "TRUE"),
+        ("EDITOR", "code -w"),
+        ("VISUAL", "code -w"),
+        ("CLAUDE_CODE_GIT_BASH_PATH", r"C:\Program Files\Git\bin\bash.exe"),
+    ]
+    for var_name, var_val in env_settings:
+        current = os.environ.get(var_name)
+        if current == var_val:
+            results.append(Result(f"setx {var_name}", "skip", f"already set to {var_val}"))
+        else:
+            r = run_install(
+                f"setx {var_name}",
+                f'setx {var_name} "{var_val}"',
+                timeout=30
+            )
+            results.append(r)
+            os.environ[var_name] = var_val
+
+    for r in results[-len(env_settings):]:
+        print_result(r)
+
+    # --- 2b. winget new installs ---
+    section("winget installs (new)")
+    winget_new = [
+        ("delta", "dandavison.delta"),
+        ("ripgrep", "BurntSushi.ripgrep.MSVC"),
+        ("GitHub CLI", "GitHub.cli"),
+        ("Starship", "Starship.Starship"),
+        ("eza", "eza-community.eza"),
+    ]
+    for name, pkg_id in winget_new:
+        r = run_install(
+            name,
+            f"winget install {pkg_id} --accept-package-agreements --accept-source-agreements",
+            timeout=300
+        )
+        results.append(r)
+        print_result(r)
+
+    # --- 2c. winget upgrades ---
+    section("winget upgrades")
+    winget_upgrades = [
+        ("Bun", "Oven-sh.Bun"),
+        ("Deno", "DenoLand.Deno"),
+        ("zoxide", "ajeetdsouza.zoxide"),
+        ("carapace", "rsteube.Carapace"),
+    ]
+    for name, pkg_id in winget_upgrades:
+        r = run_install(
+            f"{name} upgrade",
+            f"winget upgrade {pkg_id} --accept-package-agreements --accept-source-agreements",
+            timeout=300
+        )
+        results.append(r)
+        print_result(r)
+
+    # --- 2d. pip upgrades ---
+    section("pip upgrades (existing packages)")
+    pip_upgrades = [
+        "xonsh", "uv", "coconut", "ipython", "rich",
+        "pip", "setuptools", "poetry"
+    ]
+    r = run_install(
+        "pip upgrades",
+        f"pip install --upgrade --user {' '.join(pip_upgrades)}",
+        timeout=300
+    )
+    results.append(r)
+    print_result(r)
+
+    # --- 2e. pip core tooling ---
+    section("pip core tooling (new)")
+    pip_core = [
+        "structlog", "pydantic", "deepdiff", "unidiff",
+        "sqlite-utils", "watchfiles", "returns"
+    ]
+    r = run_install(
+        "pip core tools",
+        f"pip install --user {' '.join(pip_core)}",
+        timeout=300
+    )
+    results.append(r)
+    print_result(r)
+
+    # --- 2f. pip Textual framework ---
+    section("pip Textual framework")
+    r = run_install(
+        "textual + dev",
+        "pip install --user textual textual-dev",
+        timeout=300
+    )
+    results.append(r)
+    print_result(r)
+
+    # --- 2g. pip Textual ecosystem ---
+    section("pip Textual ecosystem apps")
+    pip_textual_apps = [
+        "harlequin", "posting", "trogon",
+        "frogmouth", "toolong", "textual-serve"
+    ]
+    r = run_install(
+        "Textual apps",
+        f"pip install --user {' '.join(pip_textual_apps)}",
+        timeout=300
+    )
+    results.append(r)
+    print_result(r)
+
+    # --- 2h. VSCode extensions install ---
+    section("VSCode extensions install")
+    vscode_install = [
+        ("esbenp.prettier-vscode", "Prettier (universal formatter)"),
+        ("dbaeumer.vscode-eslint", "ESLint (JS/TS linter)"),
+        ("charliermarsh.ruff", "Ruff (Python formatter)"),
+    ]
+    for ext_id, desc in vscode_install:
+        r = run_install(desc, f"code --install-extension {ext_id}")
+        results.append(r)
+        print_result(r)
+
+    # --- 2i. VSCode extensions uninstall ---
+    section("VSCode extensions uninstall (obsolete)")
+    vscode_remove = [
+        ("biomejs.biome", "Biome (glibc fails on personal PC, use Prettier+ESLint)"),
+        ("ms-python.black-formatter", "black-formatter (replaced by Ruff)"),
+        ("rvest.vs-code-prettier-eslint", "prettier-eslint (not needed with Prettier+ESLint)"),
+        ("mohsen1.prettify-json", "prettify-json (Prettier handles JSON)"),
+        ("formulahendry.auto-close-tag", "auto-close-tag (native since VSCode 1.44)"),
+    ]
+    for ext_id, desc in vscode_remove:
+        r = run_install(desc, f"code --uninstall-extension {ext_id}")
+        results.append(r)
+        print_result(r)
+
+    return results
+
+
+# ================================================================
+#  PHASE 3: VERIFY
+# ================================================================
+
+def check_version(name: str, cmd: str) -> Result:
+    """Run a version command and return result."""
+    code, out, err = run_cmd(cmd, timeout=15)
+    if code == 0:
+        version = (out or err).split("\n")[0][:60]
+        return Result(name, "ok", version)
+    else:
+        return Result(name, "fail", "not found or error")
+
+
+def check_python_import(name: str, module: str) -> Result:
+    """Check if a Python module can be imported and get its version."""
+    code, out, err = run_cmd(
+        f'python -c "import {module}; print(getattr({module}, \'__version__\', \'installed\'))"',
+        timeout=15
+    )
+    if code == 0:
+        return Result(name, "ok", out.split("\n")[0][:60])
+    else:
+        return Result(name, "fail", "import failed")
+
+
+def phase_verify() -> list:
+    """Verify all tools are installed and working."""
+    results: list = []
+
+    print(f"\n{'='*64}")
+    print(f"  Environment Verification")
+    print(f"{'='*64}")
+
+    # --- CLI tools ---
+    section("CLI tools (winget)")
+    cli_checks = [
+        ("delta", "delta --version"),
+        ("ripgrep", "rg --version"),
+        ("GitHub CLI", "gh --version"),
+        ("starship", "starship --version"),
+        ("eza", "eza --version"),
+        ("bun", "bun --version"),
+        ("zoxide", "zoxide --version"),
+        ("carapace", "carapace --version"),
+        ("fzf", "fzf --version"),
+        ("git", "git --version"),
+        ("coconut", "coconut --version"),
+        ("xonsh", "xonsh --version"),
+        ("uv", "uv --version"),
+    ]
+    for name, cmd in cli_checks:
+        r = check_version(name, cmd)
+        results.append(r)
+        print_result(r)
+
+    # --- Python imports ---
+    section("Python packages")
+    py_checks = [
+        ("textual", "textual"),
+        ("structlog", "structlog"),
+        ("pydantic", "pydantic"),
+        ("deepdiff", "deepdiff"),
+        ("sqlite-utils", "sqlite_utils"),
+        ("watchfiles", "watchfiles"),
+        ("returns", "returns"),
+        ("rich", "rich"),
+        ("unidiff", "unidiff"),
+    ]
+    for name, module in py_checks:
+        r = check_python_import(name, module)
+        results.append(r)
+        print_result(r)
+
+    # --- Textual apps ---
+    section("Textual apps")
+    app_checks = [
+        ("harlequin", "harlequin --version"),
+        ("posting", "posting --version"),
+        ("frogmouth", "frogmouth --version"),
+        ("toolong", "toolong --version"),
+    ]
+    for name, cmd in app_checks:
+        r = check_version(name, cmd)
+        results.append(r)
+        print_result(r)
+
+    # --- VSCode extensions ---
+    section("VSCode extensions")
+    code, out, err = run_cmd("code --list-extensions")
+    if code == 0:
+        exts = out.lower().splitlines()
+
+        for ext_id, desc in [
+            ("esbenp.prettier-vscode", "Prettier"),
+            ("dbaeumer.vscode-eslint", "ESLint"),
+            ("charliermarsh.ruff", "Ruff"),
+        ]:
+            if ext_id.lower() in exts:
+                results.append(Result(desc, "ok", "installed"))
+            else:
+                results.append(Result(desc, "fail", "not installed"))
+
+        for ext_id, desc in [
+            ("biomejs.biome", "Biome"),
+            ("ms-python.black-formatter", "black-formatter"),
+            ("rvest.vs-code-prettier-eslint", "prettier-eslint"),
+            ("mohsen1.prettify-json", "prettify-json"),
+            ("formulahendry.auto-close-tag", "auto-close-tag"),
+        ]:
+            if ext_id.lower() in exts:
+                results.append(Result(desc, "warn", "still installed (should be removed)"))
+            else:
+                results.append(Result(desc, "ok", "removed"))
+    else:
+        results.append(Result("VSCode CLI", "fail", "code not in PATH"))
+
+    for r in results[-8:]:
+        print_result(r)
+
+    # --- Environment variables ---
+    section("Environment variables")
+    env_checks = [
+        ("PYTHONUTF8", "1"),
+        ("COCONUT_USE_COLOR", "TRUE"),
+        ("EDITOR", "code -w"),
+    ]
+    for var, expected in env_checks:
+        actual = os.environ.get(var, "(not set)")
+        if actual == expected:
+            results.append(Result(var, "ok", actual))
+        else:
+            results.append(Result(var, "warn", f"expected '{expected}', got '{actual}'"))
+
+    for r in results[-len(env_checks):]:
+        print_result(r)
+
+    # --- Git delta test ---
+    section("Git delta integration")
+    code_git, out_git, _ = run_cmd("git config --global core.pager")
+    if "delta" in (out_git or ""):
+        if has_tool("delta"):
+            results.append(Result("git pager", "ok", "delta configured and available"))
+        else:
+            results.append(Result("git pager", "fail", "delta configured but binary missing"))
+    else:
+        results.append(Result("git pager", "warn", f"pager is '{out_git}', not delta"))
+
+    print_result(results[-1])
+
+    return results
+
+
+# ================================================================
+#  MAIN
+# ================================================================
+
+def print_summary(results: list) -> Tuple[int, int, int]:
+    ok = sum(1 for r in results if r.status == "ok")
+    skip = sum(1 for r in results if r.status == "skip")
+    fail = sum(1 for r in results if r.status == "fail")
+    warn = sum(1 for r in results if r.status == "warn")
+
+    print(f"\n{'='*64}")
+    print(f"  Results: {ok} ok / {skip} skip / {warn} warn / {fail} fail")
+    print(f"{'='*64}")
+
+    if fail == 0:
+        print("\n  [+] All checks passed")
+    else:
+        print(f"\n  [X] {fail} items need attention")
+        for r in results:
+            if r.status == "fail":
+                print(f"      - {r.name}: {r.detail}")
+
+    return (ok, warn, fail)
+
+
+def main(args: list) -> int:
+    root = find_root()
+    all_results: list = []
+    do_all = "--all" in args
+
+    print(f"\n{'='*64}")
+    print(f"  Environment Setup")
+    print(f"  Root: {root}")
+    print(f"  Python: {sys.version.split()[0]}")
+    print(f"  Platform: {sys.platform}")
+    print(f"{'='*64}")
+
+    if "--inventory" in args or do_all:
+        all_results.extend(phase_inventory(root))
+
+    if "--install" in args or do_all:
+        all_results.extend(phase_install())
+
+    if "--verify" in args or do_all:
+        all_results.extend(phase_verify())
+
+    if not any(a in args for a in ["--inventory", "--install", "--verify", "--all"]):
+        print("\n  Usage:")
+        print("    coconut-run scripts/env_setup.coco --inventory  # capture current state")
+        print("    coconut-run scripts/env_setup.coco --install    # install everything")
+        print("    coconut-run scripts/env_setup.coco --verify     # check everything works")
+        print("    coconut-run scripts/env_setup.coco --all        # all phases in order")
+        return 0
+
+    ok, warn, fail = print_summary(all_results)
+    return 1 if fail > 0 else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

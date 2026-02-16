@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(coconut *)",
+      "Bash(coconut-run *)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(uv *)",
+      "Bash(bun *)",
+      "Bash(bunx *)",
+      "Bash(git *)",
+      "Bash(code --list-extensions*)",
+      "Bash(code --install-extension*)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(powershell *)",
+      "Bash(dir *)",
+      "Write(scripts/*.coco)",
+      "Write(scripts/*.py)"
+    ],
+    "ask": [
+      "Bash(git push*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean*)",
+      "Bash(rm *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push * --force*)",
+      "Bash(sudo *)",
+      "Write(*.sh)",
+      "Write(*.bash)",
+      "Read(.env)",
+      "Read(.env.*)"
+    ]
+  }
+}

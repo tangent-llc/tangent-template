@@ -7,35 +7,16 @@
       "request": "launch",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "runtimeExecutable": "fish",
-      "runtimeArgs": ["-c", "bun run dev"],
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "dev"],
       "skipFiles": ["<node_internals>/**"]
     },
     {
-      "name": "Jupyter",
+      "name": "Python: Current File",
       "type": "python",
       "request": "launch",
       "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}",
-      "program": "poetry",
-      "args": ["run", "jupyter", "notebook"]
-    },
-    {
-      "name": "Poetry: File",
-      "type": "python",
-      "request": "launch",
-      "console": "integratedTerminal",
-      "program": "poetry",
-      "args": ["run", "python", "${file}"],
-      "justMyCode": true
-    },
-    {
-      "name": "Poetry: File (ext)",
-      "type": "python",
-      "request": "launch",
-      "program": "poetry",
-      "args": ["run", "python", "${file}"],
-      "console": "externalTerminal",
+      "program": "${file}",
       "justMyCode": true
     }
   ]

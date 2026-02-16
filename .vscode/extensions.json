@@ -1,0 +1,21 @@
+{
+  "recommendations": [
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint",
+    "bradlc.vscode-tailwindcss",
+    "charliermarsh.ruff",
+    "tamasfe.even-better-toml",
+    "jnoortheen.xonsh",
+    "davidanson.vscode-markdownlint",
+    "redhat.vscode-yaml",
+    "pkief.material-icon-theme",
+    "gruntfuggly.todo-tree"
+  ],
+  "unwantedRecommendations": [
+    "biomejs.biome",
+    "ms-python.black-formatter",
+    "rvest.vs-code-prettier-eslint",
+    "mohsen1.prettify-json",
+    "formulahendry.auto-close-tag"
+  ]
+}

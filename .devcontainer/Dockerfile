@@ -1,135 +1,174 @@
-# Start with the base image
-FROM ubuntu:jammy AS builder
+# =============================================================================
+# tangent-template Devcontainer — RHEL 9 UBI
+# =============================================================================
+# Target: GitHub Codespaces / VS Code Remote Containers
+# Stack: Bun + Fish 4.x + Python/Coconut (via uv) + Rust CLI tools
+# Version: DRAFT v1 — 2026-02-08
+# =============================================================================
 
-LABEL version="0.2"
-LABEL description="Devcontainer image with poetry and bun multirepo"
+FROM registry.access.redhat.com/ubi9/ubi AS builder
+
+LABEL version="1.0"
+LABEL description="tangent devcontainer — Bun/Fish/Python"
 LABEL maintainer="contact@tangent.berlin"
 
+# --- Args -------------------------------------------------------------------
 ARG HOME="/root"
 ARG XDG_CONFIG_HOME="/root/.config"
 ARG XDG_CACHE_HOME="/root/.cache"
 ARG WORKDIR="/src"
-ARG INSTALLDIR="/opt"
+ARG CARGO_HOME="/opt/cargo"
+ARG BUN_VERSION="1.3.9"
+ARG FISH_VERSION="4.4.0"
+ARG PYTHON_VERSION="3.12"
 
-VOLUME ["${XDG_CACHE_HOME}"]
+# --- Env vars ----------------------------------------------------------------
+ENV HOME="${HOME}" \
+    XDG_CONFIG_HOME="${XDG_CONFIG_HOME}" \
+    XDG_CACHE_HOME="${XDG_CACHE_HOME}" \
+    CARGO_HOME="${CARGO_HOME}" \
+    RUSTUP_HOME="/opt/rustup" \
+    BUN_INSTALL="${HOME}/.bun" \
+    PATH="${CARGO_HOME}/bin:${HOME}/.bun/bin:${HOME}/.local/bin:/usr/local/bin:${PATH}" \
+    LANG="en_US.UTF-8" \
+    LC_ALL="en_US.UTF-8" \
+    TZ="Europe/Berlin" \
+    EDITOR="/usr/local/bin/micro" \
+    MICRO_TRUECOLOR="1" \
+    FZF_DEFAULT_COMMAND="fd --hidden --no-ignore-vcs" \
+    BAT_THEME="Dracula"
 
-RUN mkdir -p "${HOME}" && \
-    mkdir -p "${WORKDIR}" && \
-    mkdir -p "${XDG_CONFIG_HOME}" && \
-    mkdir -p "${XDG_CACHE_HOME}" && \
-    mkdir -p "${INSTALLDIR}"
+# --- Directories -------------------------------------------------------------
+RUN mkdir -p "${HOME}" "${WORKDIR}" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}" "${CARGO_HOME}"
 
-# Env vars
-ENV DEBIAN_FRONTEND=noninteractive \
-    BUN_INSTALL="${INSTALLDIR}/bun" \
-    POETRY_HOME="${INSTALLDIR}/poetry" \
-    CARGO_HOME="${INSTALLDIR}/cargo" \
-    PATH="${CARGO_HOME}/bin:${BUN_INSTALL}/bin:${POETRY_HOME}/bin:${PATH}"
+# =============================================================================
+# Layer 1: System packages
+# =============================================================================
+RUN dnf update -y && \
+    dnf install -y \
+        https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    dnf install -y \
+        curl git unzip tar xz gzip \
+        openssl-devel bzip2-devel libffi-devel zlib-devel sqlite-devel \
+        gcc make cmake \
+        jq procps-ng findutils which diffutils \
+        langpacks-en glibc-langpack-en && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
 
-# Install dependencies
-RUN apt-get update && \
-    apt-get upgrade -y && \
-    apt-get -y install --no-install-recommends apt-utils 2>&1 && \
-    apt-get -y install iproute2 procps lsb-release pkg-config build-essential libssl-dev cmake \
-    software-properties-common cargo locales \
-    curl git gh unzip lynx jq xsel fish fzf bat micro fd-find && \
-    locale-gen en_US.UTF-8 && \
-    update-alternatives --set www-browser /usr/bin/lynx && \
-    update-alternatives --install /usr/bin/editor editor /usr/bin/micro 100 && \
-    curl -o /usr/local/bin/diff-so-fancy https://raw.githubusercontent.com/so-fancy/diff-so-fancy/master/third_party/build_fatpack/diff-so-fancy && \
-    chmod +x /usr/local/bin/diff-so-fancy && \
-    #curl -fsSL https://bun.sh/install | bash - && \ # missing version
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# =============================================================================
+# Layer 2: Rust toolchain (needed for cargo CLI tools)
+# =============================================================================
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain stable --profile minimal
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    LANG=en_US.UTF-8 \
-    LANGUAGE=en_US:en \
-    LC_ALL=en_US.UTF-8 \
-    TZ=Europe/Berlin \
-    EDITOR="/usr/bin/micro" \
-    MICRO_TRUECOLOR=1 \
-    FZF_DEFAULT_COMMAND="/usr/bin/fd" \
-    BAT_PAGER="/usr/bin/bat" \
-    FD_OPTIONS="--hidden --no-ignore-vcs"
+# =============================================================================
+# Layer 3: Fish 4.x (standalone binary — no build required)
+# =============================================================================
+RUN curl -fsSL \
+        "https://github.com/fish-shell/fish-shell/releases/download/${FISH_VERSION}/fish-${FISH_VERSION}-linux-x86_64.tar.xz" \
+        -o /tmp/fish.tar.xz && \
+    mkdir -p /tmp/fish && \
+    tar -xf /tmp/fish.tar.xz -C /tmp/fish --strip-components=1 && \
+    cp /tmp/fish/bin/fish /usr/local/bin/fish && \
+    cp /tmp/fish/bin/fish_indent /usr/local/bin/fish_indent && \
+    cp /tmp/fish/bin/fish_key_reader /usr/local/bin/fish_key_reader && \
+    chmod +x /usr/local/bin/fish* && \
+    echo "/usr/local/bin/fish" >> /etc/shells && \
+    rm -rf /tmp/fish /tmp/fish.tar.xz
 
-# Additional tool installation
-RUN curl -fsSL https://raw.githubusercontent.com/ellie/atuin/main/install.sh | bash - && \
-    cargo install nu --features=dataframe && \
-    cargo install --git https://github.com/Peltoche/lsd.git --branch master && \
-    cargo install organize-rt tre-command ripgrep watchexec-cli du-dust tokei starship && \
-    echo "deb [trusted=yes] https://apt.fury.io/rsteube/ /" >> /etc/apt/sources.list.d/rsteube.list && \
-    apt-get update && \
-    apt-get -y install carapace-bin && \
-    rm -rf "${CARGO_HOME}/registry" && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# =============================================================================
+# Layer 4: uv (replaces Poetry + pyenv)
+# =============================================================================
+COPY --from=ghcr.io/astral-sh/uv:0.10.0 /uv /uvx /bin/
 
-# Setup required ARGs
-ARG PYTHON_VERSION=3.11
-ARG NODEJS_VERSION=18
-ARG PNPM_VERSION=8.5.1
-ARG BUN_VERSION=0.6.2
-ARG POETRY_VERSION=1.4.2
+RUN uv python install ${PYTHON_VERSION}
 
-# Python installation
-RUN add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && \
-    apt-get -y install python$PYTHON_VERSION && \
-    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python$PYTHON_VERSION 1 && \
-    update-alternatives --config python3 && \
-    update-alternatives --install /usr/bin/python python /usr/bin/python$PYTHON_VERSION 1 && \
-    update-alternatives --config python && \
-    curl -fsSL https://install.python-poetry.org | python3 - --version $POETRY_VERSION && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# =============================================================================
+# Layer 5: Bun (pinned version, no Node.js)
+# =============================================================================
+RUN curl -fsSL https://bun.sh/install | bash -s -- "bun-v${BUN_VERSION}"
 
-# Node.js installation
-RUN curl -fsSL https://deb.nodesource.com/setup_$NODEJS_VERSION.x | bash - && \
-    apt-get update && \
-    apt-get install -y nodejs && \
-    npm install -g pnpm@$PNPM_VERSION bun@$BUN_VERSION
+# =============================================================================
+# Layer 6: Editor + fuzzy finder
+# =============================================================================
+RUN curl -fsSL https://getmic.ro | bash && \
+    mv micro /usr/local/bin/micro && \
+    chmod +x /usr/local/bin/micro
 
-# CLI installation
-RUN npm install -g turbo firebase-tools vercel && \
-    firebase experiments:enable webframeworks && \
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" >> /etc/apt/sources.list.d/gcloud.list && \
-    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - && \
-    apt-get update && \
-    apt-get -y install google-cloud-sdk && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 https://github.com/junegunn/fzf.git "${HOME}/.fzf" && \
+    "${HOME}/.fzf/install" --all --no-bash --no-zsh
 
-ENV DEBIAN_FRONTEND=dialog
+# =============================================================================
+# Layer 7: Cargo CLI tools via cargo-binstall (pre-compiled binaries)
+# =============================================================================
+RUN . "${CARGO_HOME}/env" && \
+    curl -fsSL https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash && \
+    cargo binstall --no-confirm \
+        bat \
+        lsd \
+        ripgrep \
+        fd-find \
+        du-dust \
+        tokei \
+        starship \
+        tre-command \
+        watchexec-cli \
+        zoxide \
+        git-delta \
+        atuin && \
+    rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git"
 
+# =============================================================================
+# Layer 8: carapace (multi-shell completions)
+# =============================================================================
+ARG CARAPACE_VERSION="1.6.1"
+RUN curl -fsSL \
+        "https://github.com/carapace-sh/carapace-bin/releases/download/v${CARAPACE_VERSION}/carapace-bin_linux_amd64.tar.gz" \
+        -o /tmp/carapace.tar.gz && \
+    tar -xzf /tmp/carapace.tar.gz -C /usr/local/bin carapace && \
+    chmod +x /usr/local/bin/carapace && \
+    rm /tmp/carapace.tar.gz
+
+# =============================================================================
+# Layer 9: Coconut (Python superset for scripting)
+# =============================================================================
+RUN uv pip install --system coconut
+
+# =============================================================================
+# Layer 10: GitHub CLI (gh)
+# =============================================================================
+RUN curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo \
+        -o /etc/yum.repos.d/gh-cli.repo && \
+    dnf install -y gh && \
+    dnf clean all
+
+# =============================================================================
+# Runtime stage
+# =============================================================================
 FROM builder
 
-# Change default shell to fish
-SHELL ["/usr/bin/fish", "-c"]
+SHELL ["/usr/local/bin/fish", "-c"]
 
-# Install fisher and plugins
+# --- Fisher + plugins --------------------------------------------------------
 RUN curl -fsSL https://raw.githubusercontent.com/jorgebucaran/fisher/main/functions/fisher.fish | source && \
-    fisher install jorgebucaran/fisher jethrokuan/z decors/fish-colored-man jorgebucaran/autopair.fish \
-    nickeb96/puffer-fish jorgebucaran/replay.fish joehillen/to-fish jorgebucaran/fishtape tangent-berlin/fzf.fish \
-    tangent-berlin/fish-fzf-z omochice/fzf-emoji.fish dteoh/fish-direnv daleeidd/natural-selection dracula/fish && \
-    curl -fsSL https://raw.githubusercontent.com/tangent-berlin/bash-bashing/main/scripts/files/git/setup_git_diff-so-fancy_aliases.sh | bash -
+    fisher install \
+        jorgebucaran/fisher \
+        decors/fish-colored-man \
+        jorgebucaran/autopair.fish \
+        nickeb96/puffer-fish \
+        jorgebucaran/replay.fish \
+        joehillen/to-fish \
+        tangent-berlin/fzf.fish \
+        tangent-berlin/fish-fzf-z \
+        omochice/fzf-emoji.fish \
+        daleeidd/natural-selection \
+        dracula/fish
 
-COPY config/* "$HOME/.config/"
-RUN mv -f "$HOME/.config/config.fish" "$HOME/.config/fish/config.fish" && \
-    mv -f "$HOME/.config/.gitconfig" "$HOME/.gitconfig" && \
-    mv -f "$HOME/.config/.gitattributes" "$HOME/.gitattributes"
+# --- Config files ------------------------------------------------------------
+COPY config/config.fish "${XDG_CONFIG_HOME}/fish/config.fish"
+COPY config/starship.toml "${XDG_CONFIG_HOME}/starship.toml"
+COPY config/.gitconfig "${HOME}/.gitconfig"
+COPY config/.gitattributes "${HOME}/.gitattributes"
 
-# ToDo: Set up a config volume
-#VOLUME ["/mnt/config"]
-# Append from config mount. To load bun config mount /mnt/config contining .bunfig.toml
-#RUN fish -c 'for file in "/mnt/config/*"; if test -f $file; cat "$file" > "$HOME/.config/$file"; end; end'
-
-# ToDo: Set up a cache volume
-# Install to fetch cache
-# RUN mkdir -p /root/.cache/template && cd /root/.cache/template && \
-#     bun create tangent-berlin/tangent-template . && \
-#     bun install
-
-WORKDIR "$WORKDIR"
-
-ENV DEBIAN_FRONTEND=dialog
+WORKDIR "${WORKDIR}"

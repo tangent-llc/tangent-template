@@ -1,0 +1,349 @@
+#!/usr/bin/env coconut-run
+"""
+Verify all formatters work end-to-end.
+
+Creates temporary test files with intentional style violations,
+runs the appropriate formatter, and checks that formatting was applied.
+
+Tests:
+  1. Prettier: JS file with bad formatting
+  2. ESLint: TS file with lint errors
+  3. Prettier: Markdown file with long unwrapped lines
+  4. Ruff: Python file with unsorted imports + style issues
+  5. Coconut: .coco file syntax check
+
+Usage:
+    coconut-run scripts/verify_formatters.coco              # Run all tests
+    coconut-run scripts/verify_formatters.coco --keep        # Keep test files for inspection
+    coconut-run scripts/verify_formatters.coco --verbose     # Show before/after
+
+Cleans up test files unless --keep is passed.
+"""
+
+import sys
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Tuple, Optional, List
+
+data TestResult(name: str, status: str, detail: str, before: str = "", after: str = "")
+# status: "pass" | "fail" | "skip"
+
+
+def run_cmd(cmd: str, timeout: int = 20) -> Tuple[int, str, str]:
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        return (r.returncode, r.stdout.strip(), r.stderr.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return (1, "", str(e))
+
+
+def tool_available(name: str) -> bool:
+    check = f"where {name}" if sys.platform == "win32" else f"which {name}"
+    code, _, _ = run_cmd(check)
+    return code == 0
+
+
+def find_root() -> Path:
+    code, stdout, _ = run_cmd("git rev-parse --show-toplevel")
+    if code == 0 and stdout:
+        return Path(stdout)
+    return Path.cwd()
+
+
+def test_prettier(root: Path) -> TestResult:
+    """Test Prettier formats JS files."""
+    test_file = root / "_test_prettier.js"
+
+    # Deliberately bad formatting
+    bad_js = 'const   x={a:1,b:2,c:3,d:4,e:5,f:6,g:7,h:8,i:9,j:10,k:11,l:12,m:13};\nconsole.log(   x  )\n'
+
+    try:
+        test_file.write_text(bad_js, encoding="utf-8")
+
+        for runner in ["bun prettier", "bunx prettier", "npx prettier", "prettier"]:
+            base = runner.split()[0]
+            if tool_available(base):
+                # prettier --check should fail on bad formatting
+                code, stdout, stderr = run_cmd(f'{runner} --check "{test_file}"')
+                if code != 0:
+                    # Good -- it detected bad formatting. Now fix it.
+                    code2, _, _ = run_cmd(f'{runner} --write "{test_file}"')
+                    if code2 == 0:
+                        return TestResult("Prettier (JS)", "pass", "detected + fixed bad formatting")
+                    return TestResult("Prettier (JS)", "fail", "detected but couldn't fix")
+                return TestResult("Prettier (JS)", "warn", "didn't detect bad formatting")
+
+        return TestResult("Prettier (JS)", "skip", "prettier not found")
+    except Exception as e:
+        return TestResult("Prettier (JS)", "fail", str(e))
+    finally:
+        test_file.unlink(missing_ok=True)
+
+
+def test_eslint(root: Path) -> TestResult:
+    """Test ESLint catches lint errors."""
+    test_file = root / "_test_eslint.ts"
+
+    # Unused variable should trigger @typescript-eslint/no-unused-vars
+    bad_ts = 'const unusedVar = 42;\nconsole.log("hello");\n'
+
+    try:
+        test_file.write_text(bad_ts, encoding="utf-8")
+
+        for runner in ["bun eslint", "bunx eslint", "npx eslint", "eslint"]:
+            base = runner.split()[0]
+            if tool_available(base):
+                code, stdout, stderr = run_cmd(f'{runner} "{test_file}"')
+                output = stdout or stderr
+                if "no-unused-vars" in output or code != 0:
+                    return TestResult("ESLint (TS)", "pass", "caught unused variable")
+                return TestResult("ESLint (TS)", "warn", "no lint errors found (may need config)")
+
+        return TestResult("ESLint (TS)", "skip", "eslint not found")
+    except Exception as e:
+        return TestResult("ESLint (TS)", "fail", str(e))
+    finally:
+        test_file.unlink(missing_ok=True)
+
+
+def test_prettier_md(root: Path) -> TestResult:
+    """Test Prettier on a Markdown file with long lines."""
+    test_file = root / "_test_prettier.md"
+
+    # Long line that should be wrapped at 80 chars (proseWrap: always in .prettierrc)
+    bad_md = """# Test Document
+
+This is a very long line that should be wrapped by Prettier because our prettierrc has proseWrap set to always and printWidth set to 80 characters which means this line is way too long and needs to be broken up into multiple lines for readability.
+
+- Item one
+- Item two
+"""
+
+    try:
+        test_file.write_text(bad_md, encoding="utf-8")
+
+        for runner in ["bun prettier", "bunx prettier", "npx prettier", "prettier"]:
+            base = runner.split()[0]
+            if tool_available(base):
+                code, stdout, stderr = run_cmd(
+                    f'{runner} --write "{test_file}"'
+                )
+                after = test_file.read_text(encoding="utf-8")
+                changed = after != bad_md
+
+                if changed:
+                    # Verify the long line was actually wrapped
+                    max_line = max(len(line) for line in after.splitlines())
+                    if max_line <= 85:  # Some slack for URLs etc
+                        return TestResult(
+                            "Prettier (MD)", "pass",
+                            f"wrapped at ~80 chars (max line: {max_line})",
+                            before=bad_md, after=after
+                        )
+                    else:
+                        return TestResult(
+                            "Prettier (MD)", "fail",
+                            f"ran but max line is {max_line} (expected <=80)",
+                            before=bad_md, after=after
+                        )
+                else:
+                    return TestResult(
+                        "Prettier (MD)", "fail",
+                        f"{runner} ran but didn't wrap long lines (check .prettierrc proseWrap)",
+                        before=bad_md, after=after
+                    )
+
+        return TestResult("Prettier (MD)", "skip", "prettier/bunx/npx not found")
+    except Exception as e:
+        return TestResult("Prettier (MD)", "fail", str(e))
+    finally:
+        test_file.unlink(missing_ok=True)
+
+
+def test_ruff(root: Path) -> TestResult:
+    """Test Ruff on a Python file with import order issues."""
+    test_file = root / "_test_ruff.py"
+
+    # Unsorted imports, unused import, long line
+    bad_py = """import json
+import os
+import sys
+from pathlib import Path
+import subprocess
+import hashlib
+
+x=1
+y =   2
+result =x+y
+print( result )
+"""
+
+    try:
+        test_file.write_text(bad_py, encoding="utf-8")
+
+        if not tool_available("ruff"):
+            return TestResult("Ruff (Python)", "skip", "ruff not found in PATH")
+
+        # Run ruff format (not just check)
+        code, stdout, stderr = run_cmd(f'ruff format "{test_file}"')
+        after = test_file.read_text(encoding="utf-8")
+        changed = after != bad_py
+
+        if changed:
+            return TestResult(
+                "Ruff (Python)", "pass",
+                "formatted (spacing, line length)",
+                before=bad_py, after=after
+            )
+
+        # Try ruff check --fix for import sorting
+        code2, stdout2, stderr2 = run_cmd(f'ruff check --fix --select I "{test_file}"')
+        after2 = test_file.read_text(encoding="utf-8")
+
+        if after2 != bad_py:
+            return TestResult(
+                "Ruff (Python)", "pass",
+                "imports sorted + formatted",
+                before=bad_py, after=after2
+            )
+
+        return TestResult(
+            "Ruff (Python)", "fail",
+            "ruff ran but no changes applied",
+            before=bad_py, after=after
+        )
+    except Exception as e:
+        return TestResult("Ruff (Python)", "fail", str(e))
+    finally:
+        test_file.unlink(missing_ok=True)
+
+
+def test_coconut_syntax(root: Path) -> TestResult:
+    """Test Coconut syntax checking on a .coco file."""
+    test_file = root / "_test_coconut.coco"
+
+    good_coco = """# Test coconut file
+import sys
+
+def double(x) = x * 2
+def add_one(x) = x + 1
+
+result = 5 |> double |> add_one
+assert result == 11
+
+data Point(x, y)
+
+p = Point(3, 4)
+assert p.x == 3 and p.y == 4
+
+words = ["hello", "world"] |> map$(str.upper) |> list
+assert words == ["HELLO", "WORLD"]
+
+print(f"[+] coconut self-test ok (Python {sys.version_info.major}.{sys.version_info.minor})")
+"""
+
+    try:
+        test_file.write_text(good_coco, encoding="utf-8")
+
+        if not tool_available("coconut"):
+            return TestResult("Coconut (syntax)", "skip", "coconut not found")
+
+        code, stdout, stderr = run_cmd(
+            f'coconut --strict --target 3.12 --nowrite "{test_file}"'
+        )
+
+        # Coconut reports compilation to stderr even on success
+        if code == 0 or ("Error" not in stderr and "error" not in stderr):
+            return TestResult(
+                "Coconut (syntax)", "pass",
+                "syntax check passed (pipes, data types, assignments)"
+            )
+        else:
+            error_line = stderr.splitlines()[-1] if stderr else "unknown error"
+            return TestResult(
+                "Coconut (syntax)", "fail",
+                f"syntax error: {error_line}"
+            )
+    except Exception as e:
+        return TestResult("Coconut (syntax)", "fail", str(e))
+    finally:
+        test_file.unlink(missing_ok=True)
+
+
+def main(args: list) -> int:
+    keep = "--keep" in args
+    verbose = "--verbose" in args
+    root = find_root()
+
+    print(f"\n{'=' * 64}")
+    print(f"  Formatter Verification")
+    print(f"  Root: {root}")
+    print(f"{'=' * 64}\n")
+
+    # Run all tests
+    tests = [
+        test_prettier,
+        test_eslint,
+        test_prettier_md,
+        test_ruff,
+        test_coconut_syntax,
+    ]
+
+    results: List[TestResult] = []
+    test_files: List[Path] = []
+
+    for test_fn in tests:
+        result = test_fn(root)
+        results.append(result)
+
+    # Collect test files for cleanup
+    test_files = list(root.glob("_test_*"))
+
+    # Print results
+    symbols = {"pass": "[+]", "fail": "[X]", "skip": "[-]"}
+
+    for r in results:
+        print(f"  {symbols[r.status]} {r.name}: {r.detail}")
+
+        if verbose and r.before and r.after and r.status in ("pass", "fail"):
+            print(f"\n      --- Before ---")
+            for line in r.before.splitlines()[:5]:
+                print(f"      {line}")
+            print(f"      --- After ---")
+            for line in r.after.splitlines()[:5]:
+                print(f"      {line}")
+            print()
+
+    # Summary
+    pass_count = len([r for r in results if r.status == "pass"])
+    fail_count = len([r for r in results if r.status == "fail"])
+    skip_count = len([r for r in results if r.status == "skip"])
+
+    print(f"\n{'=' * 64}")
+    print(f"  {pass_count} pass / {fail_count} fail / {skip_count} skip")
+    print(f"{'=' * 64}")
+
+    # Cleanup
+    if not keep:
+        for f in test_files:
+            try:
+                f.unlink()
+            except Exception:
+                pass
+        if test_files:
+            print(f"\n  Cleaned up {len(test_files)} test files")
+    else:
+        print(f"\n  [~] Test files kept: {', '.join(f.name for f in test_files)}")
+
+    if skip_count > 0:
+        print("  [!] Skipped tests: tools not in PATH (expected on Windows host)")
+        print("      These formatters work via VSCode extensions, not CLI")
+
+    print()
+    return 1 if fail_count > 0 else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

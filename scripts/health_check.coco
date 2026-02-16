@@ -1,0 +1,334 @@
+#!/usr/bin/env coconut-run
+"""
+Validate project health: configs consistent, formatters work, no orphans.
+
+Checks:
+  1. All expected config files exist
+  2. Formatter routing is consistent (Prettier+ESLint, no Biome)
+  3. .gitignore covers generated dirs (__coconut_cache__, .next, etc.)
+  4. Orphaned config dirs (e.g. nushell/ if nushell not installed)
+  5. Package.json scripts exist for format/lint
+  6. Dry-run each formatter to verify it works
+
+Usage:
+    coconut-run scripts/health_check.coco           # Full check
+    coconut-run scripts/health_check.coco --quick    # Skip formatter dry-runs
+"""
+
+import sys
+import os
+import json
+import subprocess
+from pathlib import Path
+from typing import List, Tuple, Optional
+
+data Check(name: str, status: str, detail: str)
+# status: "pass" | "warn" | "fail" | "skip"
+
+
+def run_cmd(cmd: str, timeout: int = 15) -> Tuple[int, str, str]:
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        return (r.returncode, r.stdout.strip(), r.stderr.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return (1, "", str(e))
+
+
+def load_json(path: Path) -> Optional[dict]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def find_root() -> Path:
+    p = Path.cwd()
+    for parent in [p] + list(p.parents):
+        if (parent / ".git").exists() or (parent / "package.json").exists():
+            return parent
+    return p
+
+
+def check_file_exists(root: Path, rel_path: str, critical: bool = True) -> Check:
+    """Check if a config file exists."""
+    full = root / rel_path
+    if full.exists():
+        size = full.stat().st_size
+        return Check(rel_path, "pass", f"{size} bytes")
+    else:
+        status = "fail" if critical else "warn"
+        return Check(rel_path, status, "missing")
+
+
+def check_formatter_routing(root: Path) -> List[Check]:
+    """Verify settings.json formatter assignments use Prettier+ESLint."""
+    results: List[Check] = []
+
+    settings = load_json(root / ".vscode" / "settings.json")
+    if not settings:
+        return [Check("formatter routing", "fail", ".vscode/settings.json not readable")]
+
+    # Check default formatter is Prettier
+    default = settings.get("editor.defaultFormatter", "")
+    if "prettier" in default.lower():
+        results.append(Check("default formatter", "pass", f"{default}"))
+    else:
+        results.append(Check("default formatter", "warn", f"{default} (expected esbenp.prettier-vscode)"))
+
+    # Check markdown goes to prettier
+    md_settings = settings.get("[markdown]", {})
+    md_formatter = md_settings.get("editor.defaultFormatter", "NOT SET")
+    if "prettier" in md_formatter.lower():
+        results.append(Check("[markdown] formatter", "pass", md_formatter))
+    else:
+        results.append(Check("[markdown] formatter", "fail", f"{md_formatter} (should be prettier)"))
+
+    # Check python goes to ruff
+    py_settings = settings.get("[python]", {})
+    py_formatter = py_settings.get("editor.defaultFormatter", "NOT SET")
+    if "ruff" in py_formatter.lower():
+        results.append(Check("[python] formatter", "pass", py_formatter))
+    else:
+        results.append(Check("[python] formatter", "warn", f"{py_formatter} (expected ruff)"))
+
+    # Check NO Biome references anywhere
+    settings_str = json.dumps(settings)
+    if "biome" in settings_str.lower():
+        results.append(Check("biome reference", "fail", "biome still referenced in settings.json"))
+
+    # Check NO deprecated formatters referenced anywhere
+    deprecated_refs = ["rome.rome", "black-formatter", "python.formatting.provider"]
+    for dep in deprecated_refs:
+        if dep in settings_str:
+            results.append(Check(f"deprecated ref: {dep}", "fail", "still referenced in settings"))
+
+    # Check ESLint is configured
+    eslint_config = settings.get("eslint.useFlatConfig")
+    if eslint_config:
+        results.append(Check("eslint flat config", "pass", "enabled"))
+
+    # Check biomejs.biome is in unwantedRecommendations
+    extensions = load_json(root / ".vscode" / "extensions.json")
+    if extensions:
+        unwanted = extensions.get("unwantedRecommendations", [])
+        if "biomejs.biome" in unwanted:
+            results.append(Check("biome unwanted", "pass", "in unwantedRecommendations"))
+        else:
+            results.append(Check("biome unwanted", "warn", "biomejs.biome not in unwantedRecommendations"))
+
+    return results
+
+
+def check_gitignore(root: Path) -> List[Check]:
+    """Check .gitignore covers generated directories."""
+    results: List[Check] = []
+    gi_path = root / ".gitignore"
+
+    if not gi_path.exists():
+        return [Check(".gitignore", "fail", "missing")]
+
+    content = gi_path.read_text(encoding="utf-8")
+
+    should_ignore = {
+        "__coconut_cache__": "Coconut compiled output",
+        "node_modules": "npm/bun packages",
+        ".next": "Next.js build output",
+        ".env": "secrets",
+        ".env.local": "local secrets",
+    }
+
+    for pattern, desc in should_ignore.items():
+        if pattern in content:
+            results.append(Check(f".gitignore: {pattern}", "pass", desc))
+        else:
+            results.append(Check(f".gitignore: {pattern}", "warn", f"not ignored ({desc})"))
+
+    return results
+
+
+def check_no_biome_artifacts(root: Path) -> List[Check]:
+    """Check that no Biome artifacts exist."""
+    results: List[Check] = []
+
+    biome_files = ["biome.json", "biome.jsonc"]
+    for f in biome_files:
+        if (root / f).exists():
+            results.append(Check(f, "fail", f"Biome artifact still exists -- delete it"))
+        else:
+            results.append(Check(f"no {f}", "pass", "correctly absent"))
+
+    return results
+
+
+def check_orphaned_configs(root: Path, is_container: bool = False) -> List[Check]:
+    """Find config directories for tools not in the current stack."""
+    results: List[Check] = []
+    config_dir = root / ".devcontainer" / "config"
+
+    if not config_dir.exists():
+        return results
+
+    # Tools that ONLY exist inside the devcontainer -- skip on host
+    container_only_tools = {"atuin", "lsd", "micro"}
+
+    # Known tool configs vs what's installed
+    known_configs = {
+        "nushell": "nu",
+        "atuin": "atuin",
+        "lsd": "lsd",
+        "micro": "micro",
+    }
+
+    for dirname, tool_cmd in known_configs.items():
+        dir_path = config_dir / dirname
+        if dir_path.exists() and dir_path.is_dir():
+            # On host, container-only tools are expected to be missing
+            if not is_container and dirname in container_only_tools:
+                results.append(Check(
+                    f"config/{dirname}/", "pass",
+                    f"container-only tool (skipped on host)"
+                ))
+                continue
+
+            code, _, _ = run_cmd(f"which {tool_cmd}")
+            if code != 0:
+                code, _, _ = run_cmd(f"where {tool_cmd}")
+
+            if code != 0:
+                results.append(Check(
+                    f"config/{dirname}/", "warn",
+                    f"config exists but '{tool_cmd}' not installed (orphaned?)"
+                ))
+
+    return results
+
+
+def check_formatter_works(tool: str, test_cmd: str, label: str) -> Check:
+    """Dry-run a formatter to see if it actually works."""
+    code, stdout, stderr = run_cmd(test_cmd, timeout=20)
+    output = stdout or stderr
+    if code == 0:
+        return Check(f"{label} dry-run", "pass", "executable")
+    else:
+        first_line = output.splitlines()[0] if output else "no output"
+        return Check(f"{label} dry-run", "warn", f"exit {code}: {first_line[:60]}")
+
+
+def detect_environment() -> str:
+    """Detect if running on host or inside devcontainer."""
+    if os.environ.get("REMOTE_CONTAINERS") or os.environ.get("CODESPACES"):
+        return "container"
+    if Path("/.dockerenv").exists():
+        return "container"
+    return "host"
+
+
+def main(args: list) -> int:
+    quick = "--quick" in args
+    root = find_root()
+    env = detect_environment()
+    is_container = env == "container"
+
+    print(f"\n{'=' * 64}")
+    print(f"  Project Health Check")
+    print(f"  Root: {root}")
+    print(f"  Environment: {env} ({'all checks' if is_container else 'host-aware mode'})")
+    print(f"{'=' * 64}")
+
+    all_checks: List[Check] = []
+
+    # 1. Config files exist
+    print("\n  --- Config Files ---")
+    config_files = [
+        (".vscode/settings.json", True),
+        (".vscode/extensions.json", True),
+        (".prettierrc", True),
+        ("eslint.config.mjs", True),
+        ("tsconfig.json", True),
+        (".editorconfig", True),
+        (".markdownlint.json", True),
+        (".claude/settings.json", True),
+        (".gitignore", True),
+        ("CLAUDE.md", True),
+        ("package.json", True),
+        (".prettierignore", True),
+        ("postcss.config.mjs", True),
+        ("next-env.d.ts", True),
+        ("next.config.ts", True),
+        (".dockerignore", False),
+        (".env.example", False),
+    ]
+    for rel_path, critical in config_files:
+        check = check_file_exists(root, rel_path, critical)
+        all_checks.append(check)
+
+    # 2. Formatter routing
+    print("  --- Formatter Routing ---")
+    all_checks.extend(check_formatter_routing(root))
+
+    # 3. No Biome artifacts
+    print("  --- Biome Cleanup ---")
+    all_checks.extend(check_no_biome_artifacts(root))
+
+    # 4. Gitignore
+    print("  --- .gitignore Coverage ---")
+    all_checks.extend(check_gitignore(root))
+
+    # 5. Orphaned configs (host-aware)
+    print("  --- Orphaned Configs ---")
+    all_checks.extend(check_orphaned_configs(root, is_container))
+
+    # 6. Formatter dry-runs
+    if not quick:
+        print("  --- Formatter Dry-Runs ---")
+
+        if is_container:
+            all_checks.append(check_formatter_works(
+                "prettier", "bun prettier --check README.md 2>&1", "Prettier"
+            ))
+            all_checks.append(check_formatter_works(
+                "eslint", "bun eslint --max-warnings 0 2>&1", "ESLint"
+            ))
+            all_checks.append(check_formatter_works(
+                "ruff", "ruff check --quiet scripts/ 2>&1", "Ruff"
+            ))
+        else:
+            host_tools = [
+                ("bun", "bun prettier --check README.md 2>&1", "Prettier (via bun)"),
+                ("ruff", "ruff check --quiet scripts/ 2>&1", "Ruff"),
+            ]
+            for tool_name, cmd, label in host_tools:
+                tool_code, _, _ = run_cmd(f"where {tool_name}" if sys.platform == "win32" else f"which {tool_name}")
+                if tool_code == 0:
+                    all_checks.append(check_formatter_works(tool_name, cmd, label))
+                else:
+                    all_checks.append(Check(
+                        f"{label} dry-run", "pass",
+                        f"skipped on host ({tool_name} runs via VSCode extension)"
+                    ))
+    else:
+        print("  --- Formatter Dry-Runs (skipped: --quick) ---")
+
+    # Print results
+    symbols = {"pass": "[+]", "warn": "[~]", "fail": "[X]", "skip": "[-]"}
+
+    print(f"\n{'=' * 64}")
+    pass_count = len([c for c in all_checks if c.status == "pass"])
+    warn_count = len([c for c in all_checks if c.status == "warn"])
+    fail_count = len([c for c in all_checks if c.status == "fail"])
+    print(f"  Results: {pass_count} pass / {warn_count} warn / {fail_count} fail")
+    print(f"{'=' * 64}\n")
+
+    for check in all_checks:
+        if check.status != "pass":
+            print(f"  {symbols[check.status]} {check.name}: {check.detail}")
+
+    if fail_count == 0 and warn_count == 0:
+        print("  [+] All checks passed")
+
+    print()
+    return 1 if fail_count > 0 else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

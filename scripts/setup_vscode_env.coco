@@ -1,0 +1,221 @@
+#!/usr/bin/env coconut-run
+"""
+Audit and set up VSCode extensions for tangent-template.
+
+Stack: Next.js + Bun + Tailwind + Supabase + Python/Coconut
+Formatter strategy:
+  - Prettier: JS/TS/JSX/TSX/CSS/JSON/MD/YAML (universal formatter)
+  - ESLint: JS/TS linting (flat config)
+  - Ruff: Python linting + formatting
+  - markdownlint: Markdown linting (not formatting)
+
+Usage:
+    coconut-run scripts/setup_vscode_env.coco              # Audit only
+    coconut-run scripts/setup_vscode_env.coco --install     # Audit + install missing
+
+Config files (.prettierrc, .vscode/settings.json, etc.) are maintained manually.
+Do NOT auto-generate them -- hand-edited configs are the source of truth.
+"""
+
+import sys
+import subprocess
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+# --- Extension registry ---
+
+data ExtInfo(id: str, purpose: str, status: str)
+# status: "required" | "recommended" | "optional"
+
+EXTENSIONS: Dict[str, List[ExtInfo]] = {
+    "Formatting & Linting": [
+        ExtInfo("esbenp.prettier-vscode", "Universal formatter (JS/TS/CSS/JSON/MD/YAML)", "required"),
+        ExtInfo("dbaeumer.vscode-eslint", "JS/TS linter (flat config)", "required"),
+        ExtInfo("DavidAnson.vscode-markdownlint", "Markdown linting rules (structure, not style)", "required"),
+        ExtInfo("charliermarsh.ruff", "Python linter+formatter (replaces black+flake8+pylint)", "required"),
+        ExtInfo("tamasfe.even-better-toml", "TOML formatting+validation (starship.toml, pyproject.toml)", "required"),
+        ExtInfo("redhat.vscode-yaml", "YAML schema validation (docker-compose, CI)", "recommended"),
+    ],
+    "Language Support": [
+        ExtInfo("ms-python.python", "Python core (debugging, env, intellisense)", "required"),
+        ExtInfo("ms-python.vscode-pylance", "Python type checking + autocomplete", "required"),
+        ExtInfo("bradlc.vscode-tailwindcss", "Tailwind class autocomplete + sorting", "required"),
+        ExtInfo("jnoortheen.xonsh", "Xonsh shell syntax", "recommended"),
+    ],
+    "Editor Productivity": [
+        ExtInfo("gruntfuggly.todo-tree", "TODO/FIXME tree view", "recommended"),
+        ExtInfo("PKief.material-icon-theme", "File icon theme", "optional"),
+    ],
+}
+
+# Extensions that should be REMOVED (dead, deprecated, or replaced)
+DEPRECATED: Dict[str, str] = {
+    "biomejs.biome": "Biome fails on personal PC (glibc) -> use Prettier+ESLint",
+    "rome.rome": "Dead project -> was replaced by Biome, now also dead here",
+    "ms-python.black-formatter": "Replaced by charliermarsh.ruff",
+    "ms-python.flake8": "Replaced by charliermarsh.ruff",
+    "ms-python.pylint": "Replaced by charliermarsh.ruff",
+    "zeshuaro.vscode-python-poetry": "Using uv now, not poetry",
+    "formulahendry.auto-close-tag": "Built into VSCode since 1.44",
+    "CoenraadS.bracket-pair-colorizer-2": "Built into VSCode natively",
+    "rvest.vs-code-prettier-eslint": "Separate prettier-eslint not needed",
+    "mohsen1.prettify-json": "Prettier handles JSON formatting",
+}
+
+
+def get_installed_extensions() -> List[str]:
+    """Get list of currently installed VSCode extensions."""
+    try:
+        result = subprocess.run(
+            ["code", "--list-extensions"],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0:
+            return result.stdout.strip().splitlines() |> list
+        else:
+            print("[!] Could not list extensions (is 'code' in PATH?)")
+            print(f"    stderr: {result.stderr.strip()}")
+            return []
+    except FileNotFoundError:
+        print("[!] 'code' command not found")
+        print("    Add VSCode to PATH: Shell Command: Install 'code' in PATH")
+        return []
+    except subprocess.TimeoutExpired:
+        print("[!] Timed out listing extensions")
+        return []
+
+
+def audit_extensions(installed: List[str]) -> Tuple[List[ExtInfo], List[ExtInfo], List[Tuple[str, str]]]:
+    """Compare installed vs target. Returns (missing, present, deprecated_found)."""
+    installed_lower = {e.lower() for e in installed}
+
+    missing: List[ExtInfo] = []
+    present: List[ExtInfo] = []
+
+    for category, exts in EXTENSIONS.items():
+        for ext in exts:
+            if ext.id.lower() in installed_lower:
+                present.append(ext)
+            else:
+                missing.append(ext)
+
+    deprecated_found = [
+        (ext_id, reason)
+        for ext_id, reason in DEPRECATED.items()
+        if ext_id.lower() in installed_lower
+    ]
+
+    return (missing, present, deprecated_found)
+
+
+def print_audit(installed, missing, present, deprecated_found) -> None:
+    """Print audit results."""
+    print(f"\n{'=' * 64}")
+    print(f"  VSCode Extension Audit")
+    print(f"  Installed: {len(installed)} total")
+    print(f"{'=' * 64}\n")
+
+    # Present (grouped by category)
+    print(f"[+] ACTIVE ({len(present)} of {sum(len(v) for v in EXTENSIONS.values())} target extensions)\n")
+    for category, exts in EXTENSIONS.items():
+        cat_present = [e for e in present if e in exts]
+        if cat_present:
+            print(f"  {category}:")
+            for ext in cat_present:
+                print(f"    [+] {ext.id}")
+
+    # Missing
+    if missing:
+        print(f"\n[X] MISSING ({len(missing)})\n")
+        required_missing = [e for e in missing if e.status == "required"]
+        recommended_missing = [e for e in missing if e.status == "recommended"]
+        optional_missing = [e for e in missing if e.status == "optional"]
+
+        if required_missing:
+            print("  REQUIRED (install these):")
+            for ext in required_missing:
+                print(f"    [!] {ext.id}")
+                print(f"        {ext.purpose}")
+
+        if recommended_missing:
+            print("\n  RECOMMENDED:")
+            for ext in recommended_missing:
+                print(f"    [ ] {ext.id} -- {ext.purpose}")
+
+        if optional_missing:
+            print("\n  OPTIONAL:")
+            for ext in optional_missing:
+                print(f"    [ ] {ext.id} -- {ext.purpose}")
+
+    # Deprecated
+    if deprecated_found:
+        print(f"\n[!] DEPRECATED ({len(deprecated_found)}) -- consider removing\n")
+        for ext_id, reason in deprecated_found:
+            print(f"    [-] {ext_id}")
+            print(f"        {reason}")
+
+    print()
+
+
+def install_extensions(missing: List[ExtInfo], required_only: bool = False) -> None:
+    """Install missing extensions via code CLI."""
+    to_install = (
+        [e for e in missing if e.status == "required"]
+        if required_only
+        else missing
+    )
+
+    if not to_install:
+        print("[+] Nothing to install")
+        return
+
+    print(f"\nInstalling {len(to_install)} extensions...\n")
+    for ext in to_install:
+        print(f"  Installing {ext.id}...", end=" ", flush=True)
+        result = subprocess.run(
+            ["code", "--install-extension", ext.id, "--force"],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode == 0:
+            print("[+]")
+        else:
+            print(f"[X] {result.stderr.strip()[:80]}")
+
+
+def main(args: list) -> int:
+    """Main entry point."""
+
+    do_install = "--install" in args
+
+    # Find project root (walk up to find package.json or .git)
+    project_root = Path.cwd()
+    for parent in [project_root] + list(project_root.parents):
+        if (parent / ".git").exists() or (parent / "package.json").exists():
+            project_root = parent
+            break
+
+    print(f"  Project root: {project_root}")
+
+    # Phase 1: Audit
+    print("\n--- Phase 1: Extension Audit ---")
+    installed = get_installed_extensions()
+
+    if installed:
+        missing, present, deprecated_found = audit_extensions(installed)
+        print_audit(installed, missing, present, deprecated_found)
+    else:
+        print("[!] Skipping audit (no extension list)")
+        missing = []
+
+    # Phase 2: Install
+    if do_install and missing:
+        print("--- Phase 2: Install Missing ---")
+        install_extensions(missing, required_only=False)
+    elif not do_install:
+        print("  Run with --install to add missing extensions")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,30 +1,10 @@
-version: "3"
-
 services:
   tangent:
-    # image: recrash/base:latest
-    # Using a Dockerfile is optional, but included for completeness.
     build:
       context: .
       dockerfile: Dockerfile
-      # [Optional] You can use build args to set options. e.g. 'VARIANT' below affects the image in the Dockerfile
-      args:
-        PYTHON_VERSION: "3.11"
-        NODEJS_VERSION": "18"
-        PNPM_VERSION: "8.5.1"
-        BUN_VERSION": "0.6.2"
-        POETRY_VERSION: "1.4.2"
     ports:
-      - "3000:3000"
+      - '3000:3000'
     volumes:
-      # This is where VS Code should expect to find your project's source code and the value of "workspaceFolder" in .devcontainer/devcontainer.json
-      - ..:/workspaces/tangent:cached
-
-      # Uncomment the next line to use Docker from inside the container. See https://aka.ms/vscode-remote/samples/docker-from-docker-compose for details.
-      # - /var/run/docker.sock:/var/run/docker.sock
-
-    # Overrides default command so things don't shut down after the process ends.
-    # command: bun run dev
-    # command: /usr/bin/fish -c "poetry install && bun install && bun run dev"
+      - ..:/workspaces/${COMPOSE_PROJECT_NAME:-tangent}:cached
     command: /bin/sh -c "while sleep 1000; do :; done"
-    # command: /bin/sh -c "poetry install && bun install"

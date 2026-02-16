@@ -1,58 +1,24 @@
 {
-  // "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
   "name": "tangent",
-  // "image": "recrash/base:latest",
-  // "dockerFile": "Dockerfile",
-  // "context": ".",
-  // "build": {
-  //   "args": {
-  //     "PYTHON_VERSION": "3.11",
-  //     "NODEJS_VERSION": "18",
-  //     "PNPM_VERSION": "8.5.1",
-  //     "BUN_VERSION": "0.6.2",
-  //     "POETRY_VERSION": "1.4.2"
-  //   }
-  // },
-  // Update the 'dockerComposeFile' list if you have more compose files or use different names.
   "dockerComposeFile": "docker-compose.yml",
-  // The 'service' property is the name of the service for the container that VS Code should
-  // use. Update this value and .devcontainer/docker-compose.yml to the real service name.
   "service": "tangent",
   "shutdownAction": "stopCompose",
-  // "waitFor": "postCreateCommand",
-  "updateContentCommand": "fish -c 'poetry install && bun install'",
-  "postCreateCommand": "bun run build",
-  "postAttachCommand": {
-    "server": "bun run dev"
-  },
-  "workspaceFolder": "/workspaces/tangent",
-  "forwardPorts": [3000], //[3000, 3001, 3002, 8080, 8001, 8002],
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "updateContentCommand": "bun install",
+  "forwardPorts": [3000],
   "containerEnv": {
     "HOME": "/root",
     "XDG_CONFIG_HOME": "/root/.config",
     "XDG_CACHE_HOME": "/root/.cache",
-    "PNPM_STORE_DIR": "/root/.pnpm-store",
     "LANGUAGE": "en_US:en",
     "LC_ALL": "en_US.UTF-8",
-    "TZ": "Europe/Berlin",
-    "TERM": "/bin/fish"
+    "TZ": "Europe/Berlin"
   },
   "remoteUser": "root",
   "remoteEnv": {
-    "HOME": "${containerEnv:HOME}",
-    "XDG_CONFIG_HOME": "${containerEnv:XDG_CONFIG_HOME}",
-    "XDG_CACHE_HOME": "${containerEnv:XDG_CACHE_HOME}",
-    "PNPM_STORE_DIR": "${containerEnv:PNPM_STORE_DIR}",
-    "PATH": "${containerEnv:PATH}:/opt/bun/bin:/opt/cargo/bin:/opt/poetry/bin",
-    "LANGUAGE": "${containerEnv:LANGUAGE}",
-    "LC_ALL": "${containerEnv:LC_ALL}",
-    "TZ": "${containerEnv:TZ}",
-    "EDITOR": "/usr/bin/micro",
-    "TERM": "${containerEnv:TERM}",
-    "MICRO_TRUECOLOR": "1",
-    "FZF_DEFAULT_COMMAND": "/usr/bin/fd",
-    "BAT_PAGER": "/usr/bin/bat",
-    "FD_OPTIONS": "--hidden --no-ignore-vcs"
+    "EDITOR": "/usr/local/bin/micro",
+    "MICRO_TRUECOLOR": "1"
   },
   "customizations": {
     "codespaces": {
@@ -60,23 +26,24 @@
     },
     "vscode": {
       "settings": {
-        "python.defaultInterpreterPath": "/usr/bin/python",
-        "python.formatting.provider": "black",
-        "python.linting.enabled": true,
-        "python.linting.pylintEnabled": false,
-        "python.linting.flake8Enabled": false,
-        "python.languageServer": "Pylance",
+        "terminal.integrated.defaultProfile.linux": "fish",
+        "terminal.integrated.profiles.linux": {
+          "fish": {
+            "path": "/usr/local/bin/fish"
+          }
+        },
+        "python.defaultInterpreterPath": "/root/.local/share/uv/python",
         "breadcrumbs.enabled": true,
-        "gitlens.currentLine.dateFormat": "DD.MM.YY",
         "javascript.updateImportsOnFileMove.enabled": "always",
         "typescript.updateImportsOnFileMove.enabled": "always"
       },
       "extensions": [
-        "ms-toolsai.jupyter",
         "ms-python.python",
         "ms-python.vscode-pylance",
-        "zeshuaro.vscode-python-poetry",
-        "ms-python.black-formatter"
+        "charliermarsh.ruff",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "bradlc.vscode-tailwindcss"
       ]
     }
   }

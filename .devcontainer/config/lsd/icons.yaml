@@ -21,8 +21,8 @@ name:
   tsconfig.json: 
   yarn.lock: 
 extension:
-  "c++": 
-  "f#": 
+  'c++': 
+  'f#': 
   7z: 
   ai: 
   bat: 
