@@ -1,14 +1,14 @@
 # =============================================================================
-# tangent-template Devcontainer — RHEL 9 UBI
+# tangent-template Devcontainer — Fedora 41
 # =============================================================================
 # Target: GitHub Codespaces / VS Code Remote Containers
 # Stack: Bun + Fish 4.x + Python/Coconut (via uv) + Rust CLI tools
-# Version: DRAFT v1 — 2026-02-08
+# Version: v1.1 — 2026-02-16
 # =============================================================================
 
-FROM registry.access.redhat.com/ubi9/ubi AS builder
+FROM registry.fedoraproject.org/fedora:41 AS builder
 
-LABEL version="1.0"
+LABEL version="1.1"
 LABEL description="tangent devcontainer — Bun/Fish/Python"
 LABEL maintainer="contact@tangent.berlin"
 
@@ -19,7 +19,6 @@ ARG XDG_CACHE_HOME="/root/.cache"
 ARG WORKDIR="/src"
 ARG CARGO_HOME="/opt/cargo"
 ARG BUN_VERSION="1.3.9"
-ARG FISH_VERSION="4.4.0"
 ARG PYTHON_VERSION="3.12"
 
 # --- Env vars ----------------------------------------------------------------
@@ -42,17 +41,16 @@ ENV HOME="${HOME}" \
 RUN mkdir -p "${HOME}" "${WORKDIR}" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}" "${CARGO_HOME}"
 
 # =============================================================================
-# Layer 1: System packages
+# Layer 1: System packages (Fedora has full repos — no EPEL/CRB needed)
 # =============================================================================
 RUN dnf update -y && \
-    dnf install -y \
-        https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
     dnf install -y \
         curl git unzip tar xz gzip \
         openssl-devel bzip2-devel libffi-devel zlib-devel sqlite-devel \
         gcc make cmake \
         jq procps-ng findutils which diffutils \
-        langpacks-en glibc-langpack-en && \
+        langpacks-en glibc-langpack-en \
+        fish gh && \
     dnf clean all && \
     rm -rf /var/cache/dnf
 
@@ -63,34 +61,19 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --default-toolchain stable --profile minimal
 
 # =============================================================================
-# Layer 3: Fish 4.x (standalone binary — no build required)
-# =============================================================================
-RUN curl -fsSL \
-        "https://github.com/fish-shell/fish-shell/releases/download/${FISH_VERSION}/fish-${FISH_VERSION}-linux-x86_64.tar.xz" \
-        -o /tmp/fish.tar.xz && \
-    mkdir -p /tmp/fish && \
-    tar -xf /tmp/fish.tar.xz -C /tmp/fish --strip-components=1 && \
-    cp /tmp/fish/bin/fish /usr/local/bin/fish && \
-    cp /tmp/fish/bin/fish_indent /usr/local/bin/fish_indent && \
-    cp /tmp/fish/bin/fish_key_reader /usr/local/bin/fish_key_reader && \
-    chmod +x /usr/local/bin/fish* && \
-    echo "/usr/local/bin/fish" >> /etc/shells && \
-    rm -rf /tmp/fish /tmp/fish.tar.xz
-
-# =============================================================================
-# Layer 4: uv (replaces Poetry + pyenv)
+# Layer 3: uv (replaces Poetry + pyenv)
 # =============================================================================
 COPY --from=ghcr.io/astral-sh/uv:0.10.0 /uv /uvx /bin/
 
 RUN uv python install ${PYTHON_VERSION}
 
 # =============================================================================
-# Layer 5: Bun (pinned version, no Node.js)
+# Layer 4: Bun (pinned version, no Node.js)
 # =============================================================================
 RUN curl -fsSL https://bun.sh/install | bash -s -- "bun-v${BUN_VERSION}"
 
 # =============================================================================
-# Layer 6: Editor + fuzzy finder
+# Layer 5: Editor + fuzzy finder
 # =============================================================================
 RUN curl -fsSL https://getmic.ro | bash && \
     mv micro /usr/local/bin/micro && \
@@ -100,7 +83,7 @@ RUN git clone --depth 1 https://github.com/junegunn/fzf.git "${HOME}/.fzf" && \
     "${HOME}/.fzf/install" --all --no-bash --no-zsh
 
 # =============================================================================
-# Layer 7: Cargo CLI tools via cargo-binstall (pre-compiled binaries)
+# Layer 6: Cargo CLI tools via cargo-binstall (pre-compiled binaries)
 # =============================================================================
 RUN . "${CARGO_HOME}/env" && \
     curl -fsSL https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash && \
@@ -120,35 +103,26 @@ RUN . "${CARGO_HOME}/env" && \
     rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git"
 
 # =============================================================================
-# Layer 8: carapace (multi-shell completions)
+# Layer 7: carapace (multi-shell completions — auto-resolve latest release)
 # =============================================================================
-ARG CARAPACE_VERSION="1.6.1"
-RUN curl -fsSL \
-        "https://github.com/carapace-sh/carapace-bin/releases/download/v${CARAPACE_VERSION}/carapace-bin_linux_amd64.tar.gz" \
-        -o /tmp/carapace.tar.gz && \
+RUN CARAPACE_URL=$(curl -s https://api.github.com/repos/carapace-sh/carapace-bin/releases/latest | \
+        jq -r '.assets[] | select(.name | contains("linux_amd64.tar.gz")) | .browser_download_url') && \
+    curl -fsSL "$CARAPACE_URL" -o /tmp/carapace.tar.gz && \
     tar -xzf /tmp/carapace.tar.gz -C /usr/local/bin carapace && \
     chmod +x /usr/local/bin/carapace && \
     rm /tmp/carapace.tar.gz
 
 # =============================================================================
-# Layer 9: Coconut (Python superset for scripting)
+# Layer 8: Coconut (Python superset for scripting)
 # =============================================================================
-RUN uv pip install --system coconut
-
-# =============================================================================
-# Layer 10: GitHub CLI (gh)
-# =============================================================================
-RUN curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo \
-        -o /etc/yum.repos.d/gh-cli.repo && \
-    dnf install -y gh && \
-    dnf clean all
+RUN uv tool install coconut
 
 # =============================================================================
 # Runtime stage
 # =============================================================================
 FROM builder
 
-SHELL ["/usr/local/bin/fish", "-c"]
+SHELL ["/usr/bin/fish", "-c"]
 
 # --- Fisher + plugins --------------------------------------------------------
 RUN curl -fsSL https://raw.githubusercontent.com/jorgebucaran/fisher/main/functions/fisher.fish | source && \

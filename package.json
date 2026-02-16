@@ -16,7 +16,7 @@
     "type-check": "tsc --noEmit",
     "ci": "bun run format:check && bun run lint:check && bun run type-check",
     "fix": "bun run format && bun run lint",
-    "prepare": "coconut-run scripts/precommit.coco --install"
+    "prepare": "coconut-run scripts/precommit.coco --install || true"
   },
   "dependencies": {
     "next": "^16.1.6",
