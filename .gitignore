@@ -11,7 +11,11 @@ build/
 *.tsbuildinfo
 
 # Bun
+bun.lock
 bun.lockb
+
+# Coconut compiled output
+scripts/.build/
 
 # Environment
 .env

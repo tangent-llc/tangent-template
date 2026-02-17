@@ -26,7 +26,8 @@
 .prettierrc text eol=lf
 Dockerfile text eol=lf
 
-# Lock files — binary merge
+# Lock files
+bun.lock text eol=lf
 bun.lockb binary
 
 # Binary assets

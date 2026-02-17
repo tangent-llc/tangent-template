@@ -33,7 +33,7 @@ MARKDOWNLINT_EXTENSIONS: Set[str] = {".md"}
 
 # Files to always skip
 SKIP_PATTERNS: Set[str] = {
-    "bun.lockb", "package-lock.json", "yarn.lock",
+    "bun.lock", "bun.lockb", "package-lock.json", "yarn.lock",
     ".env", ".env.local", ".env.production",
 }
 
