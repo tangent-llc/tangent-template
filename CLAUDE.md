@@ -137,7 +137,7 @@ tangent-template/
 +-- postcss.config.mjs
 +-- tsconfig.json
 +-- package.json
-+-- bun.lockb
++-- bun.lock
 ```
 
 ## Constraints

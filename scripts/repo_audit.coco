@@ -40,7 +40,7 @@ SKIP_DIRS: Set[str] = {
 LEGACY_DELETE: Dict[str, str] = {
     "turbo.json": "TurboRepo config — replaced by Bun scripts",
     "pnpm-workspace.yaml": "pnpm workspaces — replaced by Bun",
-    "pnpm-lock.yaml": "pnpm lockfile — Bun uses bun.lockb",
+    "pnpm-lock.yaml": "pnpm lockfile — Bun uses bun.lock",
     "poetry.lock": "Poetry lockfile — replaced by uv",
     "biome.json": "Biome config — Prettier+ESLint replaces it",
     "biome.jsonc": "Biome config — Prettier+ESLint replaces it",
