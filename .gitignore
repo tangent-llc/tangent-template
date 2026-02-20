@@ -1,7 +1,5 @@
 # Dependencies
 node_modules/
-.pnp
-.pnp.js
 
 # Build
 .next/
@@ -47,11 +45,6 @@ venv/
 Thumbs.db
 desktop.ini
 nul
-
-# Debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # Supabase
 .supabase/

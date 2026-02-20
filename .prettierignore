@@ -18,5 +18,8 @@ yarn.lock
 *.min.css
 coverage/
 
+# GitHub Actions (prettier breaks multi-line YAML values)
+.github/workflows/
+
 # Claude Code (auto-generated session files)
 .claude/

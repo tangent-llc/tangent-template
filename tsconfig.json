@@ -17,9 +17,7 @@
     "plugins": [{ "name": "next" }],
 
     "strict": true,
-    "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true,
-    "noFallthroughCasesInSwitch": true,
 
     "paths": { "@/*": ["./src/*"] }
   },

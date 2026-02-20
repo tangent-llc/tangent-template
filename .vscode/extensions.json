@@ -6,6 +6,7 @@
     "charliermarsh.ruff",
     "tamasfe.even-better-toml",
     "jnoortheen.xonsh",
+    "bmalehorn.vscode-fish",
     "davidanson.vscode-markdownlint",
     "redhat.vscode-yaml",
     "pkief.material-icon-theme",
