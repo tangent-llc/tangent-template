@@ -63,18 +63,21 @@ Three-tier package strategy:
 
 ## Scripts inventory
 
-| Script                   | Purpose                        |
-| ------------------------ | ------------------------------ |
-| `precommit.coco`         | Pre-commit hook                |
-| `scaffold.coco`          | Template customizer            |
-| `sync_template.coco`     | Config drift detector          |
-| `verify_formatters.coco` | End-to-end formatter test      |
-| `health_check.coco`      | Project config validator       |
-| `bootstrap_windows.coco` | Work PC env setup              |
-| `setup_vscode_env.coco`  | VSCode extension audit/install |
-| `env_setup.coco`         | Full environment setup         |
-| `env_cleanup.coco`       | Remove redundant packages      |
-| `repo_audit.coco`        | Repository audit and cleanup   |
+| Script                   | Purpose                         |
+| ------------------------ | ------------------------------- |
+| `t.coco`                 | Unified Typer CLI (`t` command) |
+| `rich_output.coco`       | Shared Rich output module       |
+| `dashboard.coco`         | Textual TUI dashboard           |
+| `precommit.coco`         | Pre-commit hook                 |
+| `scaffold.coco`          | Template customizer             |
+| `sync_template.coco`     | Config drift detector           |
+| `verify_formatters.coco` | End-to-end formatter test       |
+| `health_check.coco`      | Project config validator        |
+| `bootstrap_windows.coco` | Work PC env setup               |
+| `setup_vscode_env.coco`  | VSCode extension audit/install  |
+| `env_setup.coco`         | Full environment setup          |
+| `env_cleanup.coco`       | Remove redundant packages       |
+| `repo_audit.coco`        | Repository audit and cleanup    |
 
 ### Pipeline
 

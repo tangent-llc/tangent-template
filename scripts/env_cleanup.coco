@@ -16,10 +16,7 @@ Usage:
 """
 
 import sys
-import os
 import subprocess
-import shutil
-from pathlib import Path
 from typing import Tuple
 
 # --- Types ---
@@ -90,7 +87,7 @@ def phase_pip() -> list:
     results: list = []
 
     print(f"\n{'='*64}")
-    print(f"  pip Cleanup")
+    print("  pip Cleanup")
     print(f"{'='*64}")
 
     # --- Formatter graveyard (Ruff replaces all) ---
@@ -158,7 +155,7 @@ def phase_winget() -> list:
     results: list = []
 
     print(f"\n{'='*64}")
-    print(f"  winget Cleanup")
+    print("  winget Cleanup")
     print(f"{'='*64}")
 
     section("Redundant apps")
@@ -194,7 +191,7 @@ def phase_verify() -> list:
     results: list = []
 
     print(f"\n{'='*64}")
-    print(f"  Post-Cleanup Verification")
+    print("  Post-Cleanup Verification")
     print(f"{'='*64}")
 
     # Check Ruff still works
@@ -262,8 +259,8 @@ def phase_verify() -> list:
     section("Package count")
     code, out, _ = run_cmd("pip list")
     if code == 0:
-        count = max(0, len(out.splitlines()) - 2)
-        results.append(Result("pip packages", "ok", f"{count} total (was 188)"))
+        pkg_count = max(0, len(out.splitlines()) - 2)
+        results.append(Result("pip packages", "ok", f"{pkg_count} total (was 188)"))
     print_result(results[-1])
 
     return results
@@ -299,7 +296,7 @@ def main(args: list) -> int:
     do_all = "--all" in args
 
     print(f"\n{'='*64}")
-    print(f"  Environment Cleanup")
+    print("  Environment Cleanup")
     print(f"  Python: {sys.version.split()[0]}")
     print(f"{'='*64}")
 

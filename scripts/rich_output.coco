@@ -1,0 +1,136 @@
+"""
+Shared Rich output layer for tangent-template Coconut scripts.
+
+Provides consistent colored terminal output using Rich.
+All scripts import from here instead of doing their own print formatting.
+
+Usage:
+    from rich_output import console, header, section, results_table, summary, status_icon
+"""
+
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+from typing import Any, Sequence
+
+# -- Console --
+console: Console = Console()
+
+
+# -- Status mapping --
+_STATUS_MAP: dict = {
+    "ok":      ("bold green",  "[+]"),
+    "pass":    ("bold green",  "[+]"),
+    "KEEP":    ("bold green",  "[+]"),
+    "fail":    ("bold red",    "[X]"),
+    "DELETE":  ("bold red",    "[X]"),
+    "warn":    ("bold yellow", "[!]"),
+    "UPDATE":  ("bold yellow", "[!]"),
+    "REVIEW":  ("bold yellow", "[?]"),
+    "skip":    ("dim",         "[-]"),
+    "removed": ("dim",         "[-]"),
+}
+
+
+def status_icon(status: str) -> str:
+    """Return Rich-markup status icon for a given status string."""
+    style, icon = _STATUS_MAP.get(status, ("dim", "[?]"))
+    return f"[{style}]{icon}[/]"
+
+
+def status_style(status: str) -> str:
+    """Return Rich style string for a given status."""
+    style, _ = _STATUS_MAP.get(status, ("dim", "[?]"))
+    return style
+
+
+def header(title: str, **context: Any) -> None:
+    """Print a styled header panel with optional context lines."""
+    lines: list = [f"[bold]{title}[/]"]
+    for key, val in context.items():
+        lines.append(f"  [dim]{key}:[/] {val}")
+    console.print(Panel("\n".join(lines), border_style="bright_blue"))
+
+
+def section(title: str) -> None:
+    """Print a section divider rule."""
+    console.print(Rule(title, style="dim"))
+
+
+def results_table(
+    results: Sequence,
+    title: str = "",
+    name_attr: str = "name",
+    status_attr: str = "status",
+    detail_attr: str = "detail",
+    extra_columns: dict = {},
+) -> tuple:
+    """Build and print a Rich table from a list of result objects.
+
+    Returns (ok_count, warn_count, fail_count) for summary use.
+    Accepts any object with name/status/detail attributes (data types).
+    """
+    table: Table = Table(title=title, show_lines=False, pad_edge=True, expand=True)
+    table.add_column("", width=3, justify="center", no_wrap=True)
+    table.add_column("Name", style="bold", ratio=2)
+    table.add_column("Detail", ratio=4)
+    for col_name, col_attr in extra_columns.items():
+        table.add_column(col_name, ratio=2)
+
+    ok_count: int = 0
+    warn_count: int = 0
+    fail_count: int = 0
+
+    for r in results:
+        status = getattr(r, status_attr, "?")
+        name = getattr(r, name_attr, "?")
+        detail = getattr(r, detail_attr, "")
+        icon = status_icon(status)
+        style = status_style(status)
+
+        extra_vals: list = []
+        for col_attr_val in extra_columns.values():
+            extra_vals.append(str(getattr(r, col_attr_val, "")))
+
+        table.add_row(icon, f"[{style}]{name}[/]", detail, *extra_vals)
+
+        if status in ("ok", "pass", "KEEP"):
+            ok_count += 1
+        elif status in ("fail", "DELETE"):
+            fail_count += 1
+        elif status in ("warn", "UPDATE", "REVIEW"):
+            warn_count += 1
+
+    console.print(table)
+    return (ok_count, warn_count, fail_count)
+
+
+def summary(ok: int, warn: int, fail: int, skip: int = 0) -> None:
+    """Print a colored summary line."""
+    parts: list = [f"[bold green]{ok} ok[/]"]
+    if skip > 0:
+        parts.append(f"[dim]{skip} skip[/]")
+    if warn > 0:
+        parts.append(f"[bold yellow]{warn} warn[/]")
+    if fail > 0:
+        parts.append(f"[bold red]{fail} fail[/]")
+
+    result_text = " / ".join(parts)
+
+    if fail == 0:
+        console.print(f"\n  {result_text}  [bold green]All checks passed[/]\n")
+    else:
+        console.print(f"\n  {result_text}  [bold red]{fail} items need attention[/]\n")
+
+
+def make_progress() -> Progress:
+    """Create a pre-configured Rich progress bar for install/compile tasks."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=console,
+    )

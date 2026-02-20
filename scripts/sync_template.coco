@@ -34,7 +34,6 @@ NOT tracked (project-specific, never overwrite):
 """
 
 import sys
-import os
 import json
 import subprocess
 import hashlib
@@ -287,7 +286,7 @@ def main(args: list) -> int:
     template_path = get_arg(args, "--template")
 
     print(f"\n{'=' * 64}")
-    print(f"  Template Drift Detection")
+    print("  Template Drift Detection")
     print(f"  Project: {local_root}")
     print(f"{'=' * 64}")
 
@@ -319,8 +318,8 @@ def main(args: list) -> int:
 
         if template_root is None:
             print("\n  [!] Template not found. Options:")
-            print(f"      --template /path/to/tangent-template")
-            print(f"      --fetch  (clone from GitHub)")
+            print("      --template /path/to/tangent-template")
+            print("      --fetch  (clone from GitHub)")
             print(f"      Clone to: {local_root.parent / 'tangent-template'}")
             return 1
 

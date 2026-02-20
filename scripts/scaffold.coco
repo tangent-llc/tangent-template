@@ -19,9 +19,7 @@ Idempotent: safe to run again (updates existing values).
 """
 
 import sys
-import os
 import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
@@ -232,7 +230,7 @@ def update_eslint_config(root: Path, project_name: str) -> bool:
 def check_scaffold(root: Path) -> int:
     """Verify scaffold was run correctly."""
     print(f"\n{'=' * 64}")
-    print(f"  Scaffold Check")
+    print("  Scaffold Check")
     print(f"  Root: {root}")
     print(f"{'=' * 64}\n")
 
@@ -304,7 +302,7 @@ def main(args: list) -> int:
         return check_scaffold(root)
 
     print(f"\n{'=' * 64}")
-    print(f"  Scaffold New Project from tangent-template")
+    print("  Scaffold New Project from tangent-template")
     print(f"  Root: {root}")
     print(f"{'=' * 64}\n")
 
@@ -405,8 +403,8 @@ def main(args: list) -> int:
         print("  [!] .env.local has placeholder values -- update with real keys")
         print(f"      Edit: {root / '.env.local'}")
 
-    print(f"\n  Next: coconut-run scripts/scaffold.coco --check")
-    print(f"        coconut-run scripts/health_check.coco")
+    print("\n  Next: coconut-run scripts/scaffold.coco --check")
+    print("        coconut-run scripts/health_check.coco")
 
     return 0
 
