@@ -22,6 +22,8 @@ import subprocess
 from pathlib import Path
 from typing import List, Tuple, Optional
 
+from rich_output import console, header, section, results_table, summary
+
 data Check(name: str, status: str, detail: str)
 # status: "pass" | "warn" | "fail" | "skip"
 
@@ -153,7 +155,7 @@ def check_no_biome_artifacts(root: Path) -> List[Check]:
     biome_files = ["biome.json", "biome.jsonc"]
     for f in biome_files:
         if (root / f).exists():
-            results.append(Check(f, "fail", f"Biome artifact still exists -- delete it"))
+            results.append(Check(f, "fail", "Biome artifact still exists -- delete it"))
         else:
             results.append(Check(f"no {f}", "pass", "correctly absent"))
 
@@ -186,7 +188,7 @@ def check_orphaned_configs(root: Path, is_container: bool = False) -> List[Check
             if not is_container and dirname in container_only_tools:
                 results.append(Check(
                     f"config/{dirname}/", "pass",
-                    f"container-only tool (skipped on host)"
+                    "container-only tool (skipped on host)"
                 ))
                 continue
 
@@ -229,16 +231,16 @@ def main(args: list) -> int:
     env = detect_environment()
     is_container = env == "container"
 
-    print(f"\n{'=' * 64}")
-    print(f"  Project Health Check")
-    print(f"  Root: {root}")
-    print(f"  Environment: {env} ({'all checks' if is_container else 'host-aware mode'})")
-    print(f"{'=' * 64}")
+    header(
+        "Project Health Check",
+        Root=str(root),
+        Environment=f"{env} ({'all checks' if is_container else 'host-aware mode'})",
+    )
 
     all_checks: List[Check] = []
 
     # 1. Config files exist
-    print("\n  --- Config Files ---")
+    section("Config Files")
     config_files = [
         (".vscode/settings.json", True),
         (".vscode/extensions.json", True),
@@ -258,38 +260,52 @@ def main(args: list) -> int:
         (".dockerignore", False),
         (".env.example", False),
     ]
+    config_checks: list = []
     for rel_path, critical in config_files:
-        check = check_file_exists(root, rel_path, critical)
-        all_checks.append(check)
+        config_checks.append(check_file_exists(root, rel_path, critical))
+    all_checks.extend(config_checks)
+    results_table(config_checks, title="Config Files")
 
     # 2. Formatter routing
-    print("  --- Formatter Routing ---")
-    all_checks.extend(check_formatter_routing(root))
+    section("Formatter Routing")
+    fmt_checks = check_formatter_routing(root)
+    all_checks.extend(fmt_checks)
+    results_table(fmt_checks, title="Formatter Routing")
 
     # 3. No Biome artifacts
-    print("  --- Biome Cleanup ---")
-    all_checks.extend(check_no_biome_artifacts(root))
+    section("Biome Cleanup")
+    biome_checks = check_no_biome_artifacts(root)
+    all_checks.extend(biome_checks)
+    results_table(biome_checks, title="Biome Cleanup")
 
     # 4. Gitignore
-    print("  --- .gitignore Coverage ---")
-    all_checks.extend(check_gitignore(root))
+    section(".gitignore Coverage")
+    gi_checks = check_gitignore(root)
+    all_checks.extend(gi_checks)
+    results_table(gi_checks, title=".gitignore Coverage")
 
     # 5. Orphaned configs (host-aware)
-    print("  --- Orphaned Configs ---")
-    all_checks.extend(check_orphaned_configs(root, is_container))
+    section("Orphaned Configs")
+    orphan_checks = check_orphaned_configs(root, is_container)
+    all_checks.extend(orphan_checks)
+    if orphan_checks:
+        results_table(orphan_checks, title="Orphaned Configs")
+    else:
+        console.print("  [dim]No orphaned configs found[/]")
 
     # 6. Formatter dry-runs
     if not quick:
-        print("  --- Formatter Dry-Runs ---")
+        section("Formatter Dry-Runs")
+        dryrun_checks: list = []
 
         if is_container:
-            all_checks.append(check_formatter_works(
+            dryrun_checks.append(check_formatter_works(
                 "prettier", "bun prettier --check README.md 2>&1", "Prettier"
             ))
-            all_checks.append(check_formatter_works(
+            dryrun_checks.append(check_formatter_works(
                 "eslint", "bun eslint --max-warnings 0 2>&1", "ESLint"
             ))
-            all_checks.append(check_formatter_works(
+            dryrun_checks.append(check_formatter_works(
                 "ruff", "ruff check --quiet scripts/ 2>&1", "Ruff"
             ))
         else:
@@ -300,33 +316,25 @@ def main(args: list) -> int:
             for tool_name, cmd, label in host_tools:
                 tool_code, _, _ = run_cmd(f"where {tool_name}" if sys.platform == "win32" else f"which {tool_name}")
                 if tool_code == 0:
-                    all_checks.append(check_formatter_works(tool_name, cmd, label))
+                    dryrun_checks.append(check_formatter_works(tool_name, cmd, label))
                 else:
-                    all_checks.append(Check(
+                    dryrun_checks.append(Check(
                         f"{label} dry-run", "pass",
                         f"skipped on host ({tool_name} runs via VSCode extension)"
                     ))
+
+        all_checks.extend(dryrun_checks)
+        results_table(dryrun_checks, title="Formatter Dry-Runs")
     else:
-        print("  --- Formatter Dry-Runs (skipped: --quick) ---")
+        console.print("\n  [dim]Formatter dry-runs skipped (--quick)[/]")
 
-    # Print results
-    symbols = {"pass": "[+]", "warn": "[~]", "fail": "[X]", "skip": "[-]"}
-
-    print(f"\n{'=' * 64}")
+    # Summary
     pass_count = len([c for c in all_checks if c.status == "pass"])
     warn_count = len([c for c in all_checks if c.status == "warn"])
     fail_count = len([c for c in all_checks if c.status == "fail"])
-    print(f"  Results: {pass_count} pass / {warn_count} warn / {fail_count} fail")
-    print(f"{'=' * 64}\n")
 
-    for check in all_checks:
-        if check.status != "pass":
-            print(f"  {symbols[check.status]} {check.name}: {check.detail}")
+    summary(pass_count, warn_count, fail_count)
 
-    if fail_count == 0 and warn_count == 0:
-        print("  [+] All checks passed")
-
-    print()
     return 1 if fail_count > 0 else 0
 
 

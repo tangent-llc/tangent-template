@@ -111,7 +111,7 @@ def audit_extensions(installed: List[str]) -> Tuple[List[ExtInfo], List[ExtInfo]
 def print_audit(installed, missing, present, deprecated_found) -> None:
     """Print audit results."""
     print(f"\n{'=' * 64}")
-    print(f"  VSCode Extension Audit")
+    print("  VSCode Extension Audit")
     print(f"  Installed: {len(installed)} total")
     print(f"{'=' * 64}\n")
 

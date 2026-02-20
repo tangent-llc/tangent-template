@@ -1,0 +1,225 @@
+# dashboard.coco -- Textual TUI dashboard for tangent-template
+# Version: 1.0.0 | Updated: 2026-02-20
+# Status: ACTIVE | Owner: code@claude
+# Run: python scripts/.build/dashboard.py
+# Alias: t dashboard
+
+import sys
+import subprocess
+import asyncio
+from pathlib import Path
+
+from textual import work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, VerticalScroll
+from textual.widgets import DataTable, Footer, Header, RichLog, Static
+
+# Resolve paths
+BUILD_DIR: Path = Path(__file__).resolve().parent
+PROJECT_ROOT: Path = BUILD_DIR.parent.parent if BUILD_DIR.name == ".build" else BUILD_DIR.parent
+
+
+def _git_info() -> dict:
+    """Gather git status info (sync, fast)."""
+    info: dict = {}
+    try:
+        info["branch"] = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5, cwd=str(PROJECT_ROOT),
+        ).stdout.strip() or "unknown"
+    except Exception:
+        info["branch"] = "unknown"
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, timeout=5, cwd=str(PROJECT_ROOT),
+        ).stdout.strip()
+        info["clean"] = len(status) == 0
+        info["changes"] = len(status.splitlines()) if status else 0
+    except Exception:
+        info["clean"] = False
+        info["changes"] = -1
+    try:
+        info["last_commit"] = subprocess.run(
+            ["git", "log", "--oneline", "-1"],
+            capture_output=True, text=True, timeout=5, cwd=str(PROJECT_ROOT),
+        ).stdout.strip() or "none"
+    except Exception:
+        info["last_commit"] = "unknown"
+    return info
+
+
+def _quick_tool_check() -> list:
+    """Quick presence check for key tools. Returns list of (name, found, version)."""
+    import shutil
+    tools: list = [
+        ("git", "git --version"),
+        ("bun", "bun --version"),
+        ("coconut", "coconut --version"),
+        ("uv", "uv --version"),
+        ("fzf", "fzf --version"),
+        ("delta", "delta --version"),
+        ("eza", "eza --version"),
+        ("rg", "rg --version"),
+    ]
+    results: list = []
+    for name, cmd in tools:
+        if shutil.which(name):
+            try:
+                out = subprocess.run(
+                    cmd.split(), capture_output=True, text=True, timeout=5,
+                ).stdout.strip().split("\n")[0]
+                results.append((name, True, out))
+            except Exception:
+                results.append((name, True, "found"))
+        else:
+            results.append((name, False, "not found"))
+    return results
+
+
+class DashboardApp(App):
+    TITLE = "Tangent Dashboard"
+
+    CSS = """
+    Screen {
+        layout: vertical;
+    }
+    #top {
+        height: 2fr;
+        layout: horizontal;
+    }
+    #info-panel {
+        width: 1fr;
+        border: solid $accent;
+        padding: 0 1;
+    }
+    #tools-panel {
+        width: 2fr;
+        border: solid $primary;
+        padding: 0 1;
+    }
+    #log {
+        height: 1fr;
+        border: solid $warning;
+    }
+    #info-content {
+        height: auto;
+    }
+    """
+
+    BINDINGS = [
+        Binding("h", "run_health", "Health"),
+        Binding("v", "run_verify", "Verify"),
+        Binding("b", "run_bootstrap", "Bootstrap"),
+        Binding("a", "run_audit", "Audit"),
+        Binding("c", "clear_log", "Clear"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Horizontal(id="top"):
+            with VerticalScroll(id="info-panel"):
+                yield Static("Loading...", id="info-content")
+            with VerticalScroll(id="tools-panel"):
+                yield DataTable(id="tools-table", cursor_type="none")
+        yield RichLog(id="log", wrap=True, markup=True, max_lines=1000)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._populate_info()
+        self._populate_tools()
+
+    def _populate_info(self) -> None:
+        """Fill the info panel with git + project data."""
+        git = _git_info()
+        branch = git["branch"]
+        status_str = "[green]clean[/green]" if git["clean"] else f"[yellow]{git['changes']} changes[/yellow]"
+        commit = git["last_commit"]
+
+        lines: list = [
+            "[bold]Project[/bold]",
+            f"  Root: [dim]{PROJECT_ROOT}[/dim]",
+            f"  Python: [cyan]{sys.version.split()[0]}[/cyan]",
+            "",
+            "[bold]Git[/bold]",
+            f"  Branch: [cyan]{branch}[/cyan]",
+            f"  Status: {status_str}",
+            f"  Last: [dim]{commit}[/dim]",
+            "",
+            "[bold]Commands[/bold]",
+            "  [dim]h[/dim] health   [dim]v[/dim] verify",
+            "  [dim]b[/dim] bootstrap [dim]a[/dim] audit",
+            "  [dim]c[/dim] clear    [dim]q[/dim] quit",
+        ]
+        self.query_one("#info-content", Static).update("\n".join(lines))
+
+    def _populate_tools(self) -> None:
+        """Fill the tools table with quick presence checks."""
+        table = self.query_one("#tools-table", DataTable)
+        table.clear(columns=True)
+        table.add_columns("", "Tool", "Version")
+        for name, found, version in _quick_tool_check():
+            if found:
+                icon = "[bold green][+][/bold green]"
+                style_name = f"[green]{name}[/green]"
+            else:
+                icon = "[bold red][X][/bold red]"
+                style_name = f"[red]{name}[/red]"
+            table.add_row(icon, style_name, version)
+
+    # --- Actions ---
+
+    def action_run_health(self) -> None:
+        self._stream_script("health_check", ["--quick"])
+
+    def action_run_verify(self) -> None:
+        self._stream_script("verify_stack")
+
+    def action_run_bootstrap(self) -> None:
+        self._stream_script("bootstrap_windows", ["--dry-run"])
+
+    def action_run_audit(self) -> None:
+        self._stream_script("repo_audit")
+
+    def action_clear_log(self) -> None:
+        self.query_one("#log", RichLog).clear()
+
+    # --- Worker ---
+
+    @work(exclusive=True, exit_on_error=False)  # type: ignore
+    async def _stream_script(self, name: str, args: list = []) -> None:
+        """Run a compiled script and stream output to the log panel."""
+        log = self.query_one("#log", RichLog)
+        script = BUILD_DIR / f"{name}.py"
+
+        if not script.exists():
+            log.write(f"[bold red][X] Script not found: {script}[/bold red]")
+            return
+
+        cmd: list = [sys.executable, str(script)] + list(args)
+        log.write(f"[cyan bold]$ {name} {' '.join(args)}[/cyan bold]")
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(PROJECT_ROOT),
+        )
+
+        assert proc.stdout is not None
+        async for raw_line in proc.stdout:
+            line = raw_line.decode(errors="replace").rstrip()
+            if line:
+                log.write(line)
+
+        await proc.wait()
+        rc = proc.returncode
+        color = "green" if rc == 0 else "red"
+        log.write(f"[{color}]--- exit {rc} ---[/{color}]")
+        log.write("")
+
+
+if __name__ == "__main__":
+    DashboardApp().run()

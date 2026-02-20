@@ -239,8 +239,8 @@ exit $?
     # Also configure git to use .githooks if that dir exists
     githooks_dir = root / ".githooks"
     if githooks_dir.exists():
-        print(f"[~] Note: .githooks/ exists but hook installed to .git/hooks/")
-        print(f"    To use .githooks/ instead: git config core.hooksPath .githooks")
+        print("[~] Note: .githooks/ exists but hook installed to .git/hooks/")
+        print("    To use .githooks/ instead: git config core.hooksPath .githooks")
 
 
 def main(args: list) -> int:
@@ -312,8 +312,8 @@ def main(args: list) -> int:
         print(f"[+] All checks passed ({checks_run} tools, {checkable} files)")
         return 0
     else:
-        print(f"[X] Commit blocked -- fix errors above")
-        print(f"    To bypass: git commit --no-verify")
+        print("[X] Commit blocked -- fix errors above")
+        print("    To bypass: git commit --no-verify")
         return 1
 
 

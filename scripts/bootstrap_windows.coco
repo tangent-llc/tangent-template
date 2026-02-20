@@ -20,9 +20,10 @@ Idempotent: safe to run multiple times.
 import sys
 import os
 import subprocess
-import shutil
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import List, Tuple, Optional
+
+from rich_output import console, header, section, results_table, summary, make_progress
 
 # --- Check definitions ---
 
@@ -117,7 +118,7 @@ def check_git_config(key: str, expected: Optional[str] = None) -> CheckResult:
             )
         return CheckResult(f"git {key}", "ok", stdout)
     else:
-        detail = f"not set"
+        detail = "not set"
         fix = f'git config --global {key} "{expected}"' if expected else None
         return CheckResult(f"git {key}", "fail" if expected else "warn", detail, fix)
 
@@ -193,31 +194,18 @@ def run_all_checks(scripts_dir: Path) -> List[CheckResult]:
 
 
 def print_results(checks: List[CheckResult]) -> Tuple[int, int, int]:
-    """Print results and return counts."""
-    symbols = {"ok": "[+]", "warn": "[~]", "fail": "[X]"}
+    """Print results using Rich table and return counts."""
+    ok_count, warn_count, fail_count = results_table(
+        checks,
+        title="Windows Environment Check",
+    )
 
-    ok_count = len([c for c in checks if c.status == "ok"])
-    warn_count = len([c for c in checks if c.status == "warn"])
-    fail_count = len([c for c in checks if c.status == "fail"])
-
-    print(f"\n{'=' * 64}")
-    print(f"  Windows Environment Check")
-    print(f"  {ok_count} ok / {warn_count} warnings / {fail_count} failures")
-    print(f"{'=' * 64}\n")
-
-    # Group by status
-    for status_label, status_key in [("OK", "ok"), ("WARNINGS", "warn"), ("FAILURES", "fail")]:
-        group = [c for c in checks if c.status == status_key]
-        if not group:
-            continue
-
-        print(f"  {status_label}:")
-        for check in group:
-            print(f"    {symbols[check.status]} {check.name}")
-            print(f"       {check.detail}")
-            if check.fix_cmd and check.status != "ok":
-                print(f"       Fix: {check.fix_cmd}")
-        print()
+    # Show fix commands for non-ok items
+    fixable = [c for c in checks if c.status != "ok" and c.fix_cmd]
+    if fixable:
+        section("Available Fixes")
+        for check in fixable:
+            console.print(f"  [dim]{check.name}:[/] [italic]{check.fix_cmd}[/]")
 
     return (ok_count, warn_count, fail_count)
 
@@ -227,10 +215,10 @@ def apply_fixes(checks: List[CheckResult]) -> None:
     fixable = [c for c in checks if c.status in ("warn", "fail") and c.fix_cmd]
 
     if not fixable:
-        print("\n[+] Nothing to fix automatically")
+        console.print("\n[bold green][+] Nothing to fix automatically[/]")
         return
 
-    print(f"\n--- Applying {len(fixable)} fixes ---\n")
+    section(f"Applying {len(fixable)} fixes")
 
     for check in fixable:
         # Only auto-apply safe fixes (env vars and git config)
@@ -238,10 +226,10 @@ def apply_fixes(checks: List[CheckResult]) -> None:
             check.fix_cmd.startswith("git config") or
             check.fix_cmd.startswith("[Environment]")
         ):
-            print(f"  Fixing {check.name}...")
+            console.print(f"  Fixing [bold]{check.name}[/]...", end=" ")
 
             if check.fix_cmd.startswith("[Environment]"):
-                # PowerShell env var — set in current process too
+                # PowerShell env var -- set in current process too
                 match check:
                     case CheckResult(name=name) if "PYTHONUTF8" in name:
                         os.environ["PYTHONUTF8"] = "1"
@@ -250,43 +238,40 @@ def apply_fixes(checks: List[CheckResult]) -> None:
 
                 code, _, stderr = run_cmd(f'powershell -Command \'{check.fix_cmd}\'')
                 if code == 0:
-                    print(f"    [+] Set (takes effect in new terminals)")
+                    console.print("[bold green][+] Set[/]")
                 else:
-                    print(f"    [X] Failed: {stderr[:80]}")
+                    console.print(f"[bold red][X] Failed: {stderr[:80]}[/]")
 
             elif check.fix_cmd.startswith("git config"):
                 code, _, stderr = run_cmd(check.fix_cmd)
                 if code == 0:
-                    print(f"    [+] Applied")
+                    console.print("[bold green][+] Applied[/]")
                 else:
-                    print(f"    [X] Failed: {stderr[:80]}")
+                    console.print(f"[bold red][X] Failed: {stderr[:80]}[/]")
         else:
-            print(f"  [~] {check.name} -- manual fix required:")
-            print(f"      {check.fix_cmd}")
+            console.print(f"  [bold yellow][!] {check.name}[/] -- manual fix required:")
+            console.print(f"      [italic]{check.fix_cmd}[/]")
 
 
 def warmup_cache(scripts_dir: Path) -> None:
     """Pre-compile all .coco files to eliminate cold start."""
     coco_files = sorted(scripts_dir.glob("*.coco"))
     if not coco_files:
-        print("\n[+] No .coco files to warm up")
+        console.print("\n[bold green][+] No .coco files to warm up[/]")
         return
 
-    print(f"\n--- Warming Coconut cache ({len(coco_files)} files) ---\n")
+    section(f"Warming Coconut cache ({len(coco_files)} files)")
 
-    for f in coco_files:
-        print(f"  Compiling {f.name}...", end=" ", flush=True)
-        code, stdout, stderr = run_cmd(
-            f'coconut --target 3.12 --nowrite "{f}"', timeout=30
-        )
-        if code == 0:
-            print("[+]")
-        else:
-            # Coconut outputs compilation info to stderr
-            if "Coconut" in stderr and "Error" not in stderr:
-                print("[+]")
-            else:
-                print(f"[X] {stderr[:80]}")
+    with make_progress() as progress:
+        task = progress.add_task("Compiling...", total=len(coco_files))
+        for f in coco_files:
+            progress.update(task, description=f"Compiling {f.name}")
+            code, stdout, stderr = run_cmd(
+                f'coconut --target 3.12 --nowrite "{f}"', timeout=30
+            )
+            if code != 0 and "Error" in stderr:
+                console.print(f"  [bold red][X] {f.name}: {stderr[:80]}[/]")
+            progress.advance(task)
 
 
 def main(args: list) -> int:
@@ -304,9 +289,12 @@ def main(args: list) -> int:
 
     scripts_dir = project_root / "scripts"
 
-    print(f"  Project: {project_root}")
-    print(f"  Platform: {sys.platform}")
-    print(f"  Python: {sys.version.split()[0]}")
+    header(
+        "Windows Environment Check",
+        Project=str(project_root),
+        Platform=sys.platform,
+        Python=sys.version.split()[0],
+    )
 
     # Run checks
     checks = run_all_checks(scripts_dir)
@@ -315,16 +303,18 @@ def main(args: list) -> int:
     # Apply fixes
     if do_fix:
         apply_fixes(checks)
-        print("\n  Re-run without --fix to verify fixes took effect")
+        console.print("\n  [dim]Re-run without --fix to verify fixes took effect[/]")
 
     # Warm cache
     if do_warmup:
         warmup_cache(scripts_dir)
 
     # Summary
+    summary(ok, warns, fails)
+
     if not do_fix and (warns > 0 or fails > 0):
-        print("  Run with --fix to apply automatic fixes")
-        print("  Run with --fix --warmup to also pre-compile Coconut scripts")
+        console.print("  [dim]Run with --fix to apply automatic fixes[/]")
+        console.print("  [dim]Run with --fix --warmup to also pre-compile Coconut scripts[/]")
 
     return 1 if fails > 0 else 0
 

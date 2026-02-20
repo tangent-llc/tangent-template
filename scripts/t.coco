@@ -1,0 +1,138 @@
+# t.coco -- Unified CLI for tangent-template scripts
+# Version: 1.0.0 | Updated: 2026-02-20
+# Status: ACTIVE | Owner: code@claude
+# Run: python scripts/.build/t.py [command]
+# Alias: t (defined in .xonshrc)
+
+import sys
+import subprocess
+from pathlib import Path
+import typer
+from rich.console import Console
+
+console: Console = Console()
+
+# Resolve scripts/.build/ relative to this file's location
+BUILD_DIR: Path = Path(__file__).resolve().parent
+# Resolve project root (scripts/.build/../..)
+PROJECT_ROOT: Path = BUILD_DIR.parent.parent if BUILD_DIR.name == ".build" else BUILD_DIR.parent
+
+app = typer.Typer(
+    name="t",
+    help="Tangent-template project CLI. Wraps all Coconut scripts.",
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+)
+
+
+def _run_script(name: str, args: list = [], check: bool = True) -> int:
+    """Run a compiled script from .build/ dir, forwarding args."""
+    script = BUILD_DIR / f"{name}.py"
+    if not script.exists():
+        console.print(f"  [bold red][X][/] Script not found: {script}")
+        console.print("      Run: [dim]coco-build[/] to compile scripts first")
+        raise typer.Exit(code=1)
+    cmd: list = [sys.executable, str(script)] + list(args)
+    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    return result.returncode
+
+
+@app.command()
+def health(
+    quick: bool = typer.Option(False, "--quick", "-q", help="Skip formatter dry-runs"),
+) -> None:
+    """Project config validator -- checks files, formatters, gitignore."""
+    args: list = ["--quick"] if quick else []
+    code = _run_script("health_check", args)
+    raise typer.Exit(code=code)
+
+
+@app.command()
+def verify() -> None:
+    """Stack verification -- checks CLI tools, Python libs, env vars."""
+    code = _run_script("verify_stack")
+    raise typer.Exit(code=code)
+
+
+@app.command()
+def bootstrap(
+    fix: bool = typer.Option(False, "--fix", "-f", help="Apply automatic fixes"),
+    warmup: bool = typer.Option(False, "--warmup", "-w", help="Pre-compile Coconut cache"),
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run", help="Preview without changes"),
+) -> None:
+    """Windows environment setup -- checks tools, env vars, git config."""
+    args: list = []
+    if fix:
+        args.append("--fix")
+    if warmup:
+        args.append("--warmup")
+    if not dry_run:
+        args.append("--no-dry-run")
+    else:
+        args.append("--dry-run")
+    code = _run_script("bootstrap_windows", args)
+    raise typer.Exit(code=code)
+
+
+@app.command()
+def audit() -> None:
+    """Repository audit -- checks for orphans, drift, dead files."""
+    code = _run_script("repo_audit")
+    raise typer.Exit(code=code)
+
+
+@app.command()
+def fmt() -> None:
+    """End-to-end formatter verification."""
+    code = _run_script("verify_formatters")
+    raise typer.Exit(code=code)
+
+
+@app.command()
+def sync() -> None:
+    """Config drift detector -- compare against template upstream."""
+    code = _run_script("sync_template")
+    raise typer.Exit(code=code)
+
+
+@app.command()
+def vscode() -> None:
+    """VSCode extension audit and installer."""
+    code = _run_script("setup_vscode_env")
+    raise typer.Exit(code=code)
+
+
+@app.command()
+def precommit() -> None:
+    """Run pre-commit checks (format + lint)."""
+    code = _run_script("precommit")
+    raise typer.Exit(code=code)
+
+
+@app.command()
+def build() -> None:
+    """Compile all .coco scripts to .build/ (coconut --strict)."""
+    scripts_dir: Path = PROJECT_ROOT / "scripts"
+    build_dir: Path = scripts_dir / ".build"
+    cmd: list = [
+        "coconut", "--strict", "--target", "3.11",
+        "--no-tco", str(scripts_dir), str(build_dir),
+    ]
+    console.print("  [dim]Compiling scripts/*.coco -> scripts/.build/*.py[/]")
+    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    if result.returncode == 0:
+        console.print("  [bold green][+][/] Build complete")
+    else:
+        console.print("  [bold red][X][/] Build failed")
+    raise typer.Exit(code=result.returncode)
+
+
+@app.command()
+def dashboard() -> None:
+    """Interactive TUI dashboard -- status, tools, run checks."""
+    code = _run_script("dashboard")
+    raise typer.Exit(code=code)
+
+
+if __name__ == "__main__":
+    app()

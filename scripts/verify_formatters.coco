@@ -21,11 +21,9 @@ Cleans up test files unless --keep is passed.
 """
 
 import sys
-import os
 import subprocess
-import tempfile
 from pathlib import Path
-from typing import Tuple, Optional, List
+from typing import Tuple, List
 
 data TestResult(name: str, status: str, detail: str, before: str = "", after: str = "")
 # status: "pass" | "fail" | "skip"
@@ -278,7 +276,7 @@ def main(args: list) -> int:
     root = find_root()
 
     print(f"\n{'=' * 64}")
-    print(f"  Formatter Verification")
+    print("  Formatter Verification")
     print(f"  Root: {root}")
     print(f"{'=' * 64}\n")
 
@@ -308,10 +306,10 @@ def main(args: list) -> int:
         print(f"  {symbols[r.status]} {r.name}: {r.detail}")
 
         if verbose and r.before and r.after and r.status in ("pass", "fail"):
-            print(f"\n      --- Before ---")
+            print("\n      --- Before ---")
             for line in r.before.splitlines()[:5]:
                 print(f"      {line}")
-            print(f"      --- After ---")
+            print("      --- After ---")
             for line in r.after.splitlines()[:5]:
                 print(f"      {line}")
             print()

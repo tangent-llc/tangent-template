@@ -18,8 +18,6 @@ Outputs a report. Does NOT modify any files.
 """
 
 import sys
-import os
-import re
 from pathlib import Path
 from typing import List, Tuple, Set, Dict, Optional
 
@@ -288,7 +286,7 @@ def main(args: list) -> int:
     if stale_findings:
         print(f"  Found {len(stale_findings)} stale references\n")
     else:
-        print(f"  No stale references found\n")
+        print("  No stale references found\n")
 
     # Combine all findings
     all_findings = findings + [f for f in expected_findings if f.verdict == "REVIEW"] + stale_findings
